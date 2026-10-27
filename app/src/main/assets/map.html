@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #fafafa; }
+  #map { width: 100%; height: 100%; }
+  #hint {
+    position: absolute; top: 8px; left: 50%; transform: translateX(-50%);
+    background: rgba(21,101,192,0.9); color: #fff; font-size: 12px;
+    padding: 4px 12px; border-radius: 12px; z-index: 1000; white-space: nowrap;
+  }
+</style>
+</head>
+<body>
+<div id="hint">点击地图选择位置</div>
+<div id="map"></div>
+<script>
+  var map = L.map('map', { zoomControl: true }).setView([39.908722, 116.397499], 14);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  var marker = null;
+  map.on('click', function(e) {
+    var lat = e.latlng.lat, lng = e.latlng.lng;
+    if (marker) { marker.setLatLng(e.latlng); }
+    else { marker = L.marker(e.latlng).addTo(map); }
+    // 回传给 Android（WGS-84，OSM 原生坐标系）
+    if (window.AndroidBridge && AndroidBridge.onMapClick) {
+      AndroidBridge.onMapClick(lat, lng);
+    }
+  });
+
+  // 地图移动结束：回传中心点与视野跨度（供 Android 计算 viewbox 影响搜索排序）
+  function reportMove() {
+    if (!window.AndroidBridge || !AndroidBridge.onMapMove) return;
+    var c = map.getCenter();
+    var b = map.getBounds();
+    // span 取经度半跨度（度），与 Android 端 viewboxParam 的 d 语义一致
+    var span = (b.getEast() - b.getWest()) / 2;
+    if (!(span > 0)) span = 0.08;
+    AndroidBridge.onMapMove(c.lat, c.lng, span);
+  }
+  map.on('moveend', reportMove);
+  map.on('zoomend', reportMove);
+
+  // 供外部设置中心点（搜索结果/初始坐标）
+  window.setCenter = function(lat, lng) {
+    map.setView([lat, lng], 16);
+    if (marker) { marker.setLatLng([lat, lng]); }
+    else { marker = L.marker([lat, lng]).addTo(map); }
+  };
+</script>
+</body>
+</html>

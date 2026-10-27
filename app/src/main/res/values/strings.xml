@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Mock Location Lab</string>
+    <string name="test_reader_title">定位读取测试</string>
+    <string name="map_picker_title">地图选点</string>
+    <string name="search_hint">搜索 POI：学校 / 商场 / 地标…</string>
+    <string name="btn_start_mock">开始模拟</string>
+    <string name="btn_stop_mock">停止模拟</string>
+    <string name="status_idle">状态：空闲（未模拟）</string>
+    <string name="status_running">状态：模拟中</string>
+    <string name="status_stopped">状态：已停止，provider 已释放</string>
+    <string name="lat_label">纬度 (lat)</string>
+    <string name="lng_label">经度 (lng)</string>
+    <string name="coord_system_label">坐标系</string>
+    <string name="open_dev_settings">前往开发者选项（选择模拟位置信息应用）</string>
+    <string name="request_location_perm">申请定位权限</string>
+    <string name="open_test_reader">打开定位读取测试页</string>
+</resources>

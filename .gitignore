@@ -1,0 +1,35 @@
+# Gradle
+.gradle/
+build/
+*/build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+captures/
+local.properties
+
+# Keystore（绝不入库）
+*.jks
+*.keystore
+keystore.properties
+
+# 构建产物与本地 APK
+*.apk
+*.aab
+app/release/
+
+# 测试临时 UI dump
+diag*.xml
+test-*.xml
+tokyo*.xml
+sh[0-9]*.xml
+ui.xml
+
+# 系统/日志
+.DS_Store
+*.log
+
+# 快照
+*-snapshot-*.zip

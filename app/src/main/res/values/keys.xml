@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 高德 Key：从本地配置读取（local.properties 中 AMAP_KEY=xxx），不提交到仓库 -->
+    <string name="amap_key" translatable="false"></string>
+</resources>
