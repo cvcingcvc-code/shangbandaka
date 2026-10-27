@@ -2,6 +2,8 @@
 
 日期：2026-10-27 ｜ 版本：v1.1.1（versionCode 3）｜ 测试环境：Android 模拟器 emulator-5554（API 35，host GPU）
 
+> **Phase D 实体手机检测（2026-10-27 19:20）**：`adb devices -l` 仅检测到 emulator-5554（sdk_gphone64_x86_64），**无实体安卓设备连接**。按预案：不伪造测试结果，保留模拟器测试报告，发布可安装 Beta 包，人工手机测试步骤见 INSTALL_GUIDE.md，等待真实手机反馈。
+
 ---
 
 ## 一、本次修复内容（P0 定位 + P1 最小修复）
@@ -107,7 +109,12 @@
 
 | 文件 | 说明 |
 |---|---|
-| `F:\MockLocationLab\MockLocationLab-v1.1.1-debug.apk` | 最终 APK（versionCode 3），SHA-256 `f8d0abf324043085a13169f027aef40a94bd61864b864edf8b3e7443cf6ecea5`，3,594,457 字节 |
+| `F:\MockLocationLab\MockLocationLab-v1.1.1-beta.1-release.apk` | **最终 Release APK（独立签名）**，versionCode 3，SHA-256 `f3eaa3ce2e2fec0c88e856c9d64dce6743e87d3d4dd7755e724e1438a0d93d2d`，2,728,464 字节，Release 下载地址 https://github.com/cvcingcvc-code/shangbandaka/releases/tag/v1.1.1-beta.1（Pre-release） |
+| `F:\MockLocationLab\MockLocationLab-v1.1.1-debug.apk` | Debug 版（SHA-256 `f8d0abf324043085a13169f027aef40a94bd61864b864edf8b3e7443cf6ecea5`，3,594,457 字节，本报告第一~三节测试所用包） |
+| `F:\MockLocationLab-snapshot-v1.1.1-20261027.zip` | 本地快照（源码+文档 32 文件，交付前状态可恢复） |
+| GitHub 仓库 | https://github.com/cvcingcvc-code/shangbandaka （main 21e2b2d1e4，tag v1.1.1-beta.1） |
+
+**Release 签名补充验证（模拟器，release 包 smoke）**：卸载 debug → 安装 release → `mock_location: allow` 重配 → 启动正常 → mock 注入 `Location[gps 39.908722,116.397499 ... mock]` → 停止后 `gps provider [mock]` 计数 0 → apksigner 核查独立证书（SHA-256 461211f9...4b6，CN=Mock Location Lab）→ aapt2 badging：minSdk 26 / targetSdk 35 / 7 项权限齐全。
 
 ---
 
