@@ -16,6 +16,8 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Spinner
+import android.widget.ScrollView
+import java.util.Locale
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -31,7 +33,7 @@ import java.net.URLEncoder
  * P0 搜索准确性修复：
  * - 结果显示 地点名称 + 城市 + 国家（addressdetails=1 结构化）
  * - 地图可视区域影响排序（viewbox + bounded=0 视野优先；可选 仅视野内 / 全球）
- * - 地图中心明确在中国时默认 countrycodes=cn（可在范围选项里改回全球）
+ * - 全球结果可按地图视野优先排列，不默认限制国家
  * - 用户必须明确点击结果选择，绝不自动选第一条
  * - 选中后地图移动到对应位置并显示完整信息，供检查确认坐标
  * P1 稳定性：
@@ -64,6 +66,7 @@ class MapPickerActivity : AppCompatActivity() {
     private var mapSpan = 0.08
 
     private var lastSearchAt = 0L
+    private var searchGeneration = 0
 
     /** JS 桥：地图点击回传（WGS-84） */
     inner class JsBridge {
@@ -87,15 +90,18 @@ class MapPickerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
-        setupWebView()
         val initLat = intent.getDoubleExtra("init_lat", 39.908722)
         val initLng = intent.getDoubleExtra("init_lng", 116.397499)
         webView.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView?, url: String?) {
-                view?.evaluateJavascript("window.setCenter && setCenter($initLat, $initLng)", null)
+                val lat = if (selLat.isFinite()) selLat else initLat
+                val lng = if (selLng.isFinite()) selLng else initLng
+                view?.evaluateJavascript("window.setCenter && setCenter($lat, $lng)", null)
             }
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
         }
+        setupWebView()
+        // 搜索由主界面的用户操作触发；结果仍需明确选择。
         // 自动化测试入口：Intent 直传搜索词（仍需用户点击结果确认）
         // search_scope: 0=视野优先(默认) 1=仅视野内 2=全球 —— headless 测试 tap 无效，用 extra 控制
         val presetQuery = intent.getStringExtra("search_query")
@@ -138,18 +144,23 @@ class MapPickerActivity : AppCompatActivity() {
         spScope = Spinner(this).apply {
             adapter = ArrayAdapter(this@MapPickerActivity,
                 android.R.layout.simple_spinner_dropdown_item,
-                listOf("视野优先（推荐）", "仅当前视野内", "全球搜索"))
+                listOf("视野优先（全球）", "仅当前视野内", "全球搜索"))
         }
         root.addView(spScope)
 
         // 搜索结果列表
         resultContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(resultContainer)
+        val resultScroll = ScrollView(this).apply {
+            addView(resultContainer)
+            isFillViewport = false
+        }
+        root.addView(resultScroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, (120 * resources.displayMetrics.density).toInt()))
 
-        // 地图
+        // 为地图分配剩余空间，确认按钮固定可见。
         webView = WebView(this)
         root.addView(webView, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 340 * resources.displayMetrics.density.toInt()))
+            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
 
         // 已选坐标（含名称/城市/国家）
         tvSelected = TextView(this).apply {
@@ -176,13 +187,19 @@ class MapPickerActivity : AppCompatActivity() {
             Toast.makeText(this, "Nominatim 限每秒 1 次请求，请稍候再搜", Toast.LENGTH_SHORT).show()
             return
         }
-        lastSearchAt = now
-
         val kw = etSearch.text.toString().trim()
         if (kw.isEmpty()) {
             Toast.makeText(this, "请输入关键词", Toast.LENGTH_SHORT).show()
             return
         }
+        lastSearchAt = now
+        val generation = ++searchGeneration
+        selLat = Double.NaN
+        selLng = Double.NaN
+        btnConfirm.isEnabled = false
+        tvSelected.text = "请选择搜索结果或点击地图"
+        resultContainer.removeAllViews()
+        resultContainer.addView(TextView(this).apply { text = "搜索中…" })
         // P0 诊断：主线程先快照请求参数，避免后台线程读 UI 控件的竞态
         val scopePos = spScope.selectedItemPosition
         val vbParam = viewboxParam()
@@ -198,9 +215,9 @@ class MapPickerActivity : AppCompatActivity() {
                     .append("&format=json&limit=8&accept-language=zh-CN")
                     .append("&addressdetails=1") // 结构化城市/国家
                 when (scopePos) {
-                    0 -> { // 视野优先：viewbox 偏向排序，不硬限制；中心在中国时加 cn 提升准确性
+                    0 -> { // 视野优先：viewbox 偏向排序，不硬限制国家
                         sb.append("&viewbox=").append(vbParam).append("&bounded=0")
-                        if (inChina) sb.append("&countrycodes=cn")
+                        // 视野只影响排序，不限制国家。
                     }
                     1 -> { // 仅当前视野内
                         sb.append("&viewbox=").append(vbParam).append("&bounded=1")
@@ -219,7 +236,7 @@ class MapPickerActivity : AppCompatActivity() {
                 android.util.Log.i(TAG, "response http=$code bodyLen=${body.length} head=${body.take(150)}")
                 conn.disconnect()
                 if (code != 200) {
-                    runUiToast("搜索失败 HTTP $code（仍可地图点选/手输坐标）")
+                    runUiToast("搜索失败 HTTP $code（仍可地图点选/手输坐标）", generation)
                     return@Thread
                 }
                 val arr = org.json.JSONArray(body)
@@ -234,25 +251,24 @@ class MapPickerActivity : AppCompatActivity() {
                     }
                     // addressdetails: city/state/country
                     val addr = o.optJSONObject("address") ?: JSONObject()
-                    val city = addr.optString("city", "").ifBlank {
-                        addr.optString("state", "").ifBlank { addr.optString("county", "") }
-                    }
-                    val country = addr.optString("country", "")
-                    out.add(NomaPoi(name, city, country, lat, lng))
+                    val city = listOf("city", "town", "village", "municipality", "county", "state")
+                        .map { addr.optString(it, "") }.firstOrNull { it.isNotBlank() } ?: "城市未标注"
+                    val country = addr.optString("country", "").ifBlank { "国家未标注" }
+                    out.add(NomaPoi(name, city, country, lat, lng, o.optString("display_name", "")))
                 }
-                runOnUiThread { if (!isDestroyed && !isFinishing) renderResults(out) }
+                runOnUiThread { if (!isDestroyed && !isFinishing && generation == searchGeneration) renderResults(out) }
                 android.util.Log.i(TAG, "parsed count=${out.size} first=${out.firstOrNull()?.let { "${it.name}|${it.city}|${it.country}|${it.lat},${it.lng}" } ?: "none"}")
-                if (out.isEmpty()) runUiToast("无结果（仍可地图点选/手输坐标）")
+                if (out.isEmpty()) runUiToast("无结果（仍可地图点选/手输坐标）", generation)
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "search exception url=$finalUrl", e)
-                runUiToast("搜索错误: ${e.javaClass.simpleName}: ${e.message}（仍可地图点选/手输坐标）")
+                runUiToast("搜索错误: ${e.javaClass.simpleName}: ${e.message}（仍可地图点选/手输坐标）", generation)
             }
         }.start()
     }
 
-    private fun runUiToast(msg: String) {
+    private fun runUiToast(msg: String, generation: Int) {
         runOnUiThread {
-            if (!isDestroyed && !isFinishing) {
+            if (!isDestroyed && !isFinishing && generation == searchGeneration) {
                 // P0-6：错误必须写进结果区（UI dump 可捕获），不能只靠 Toast
                 resultContainer.removeAllViews()
                 resultContainer.addView(TextView(this).apply {
@@ -271,7 +287,7 @@ class MapPickerActivity : AppCompatActivity() {
         val right = mapCenterLng + d
         val top = mapCenterLat + d * 0.6
         val bottom = mapCenterLat - d * 0.6
-        return "%.5f,%.5f,%.5f,%.5f".format(left, top, right, bottom)
+        return String.format(Locale.US, "%.5f,%.5f,%.5f,%.5f", left, top, right, bottom)
     }
 
     /** 地图中心是否明确在中国境内（粗判即可） */
@@ -284,8 +300,11 @@ class MapPickerActivity : AppCompatActivity() {
         for (p in list.take(8)) {
             val tv = TextView(this).apply {
                 // 必须显示：地点名称 + 城市 + 国家
-                text = "📍 ${p.name}\n   ${p.city}, ${p.country} (%.5f, %.5f)".format(p.lat, p.lng)
-                setPadding(0, 6, 0, 6)
+                text = "📍 ${p.name}\n${p.city}, ${p.country}\n${p.displayName}\n" + String.format(Locale.US, "%.5f, %.5f", p.lat, p.lng)
+                val inset = (8 * resources.displayMetrics.density).toInt()
+                setPadding(inset, inset, inset, inset)
+                minHeight = (48 * resources.displayMetrics.density).toInt()
+                isFocusable = true
                 setOnClickListener { pick(p.lat, p.lng, p.name, "${p.city}, ${p.country}") }
             }
             resultContainer.addView(tv)
@@ -337,5 +356,5 @@ class MapPickerActivity : AppCompatActivity() {
     }
 
     data class NomaPoi(val name: String, val city: String, val country: String,
-                       val lat: Double, val lng: Double)
+                       val lat: Double, val lng: Double, val displayName: String)
 }
