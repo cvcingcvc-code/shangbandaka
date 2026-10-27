@@ -25,6 +25,7 @@ diag*.xml
 test-*.xml
 tokyo*.xml
 sh[0-9]*.xml
+rel*.xml
 ui.xml
 
 # 系统/日志
