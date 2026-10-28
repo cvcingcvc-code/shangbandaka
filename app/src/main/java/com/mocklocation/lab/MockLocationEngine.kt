@@ -1,5 +1,6 @@
 package com.mocklocation.lab
 
+import android.annotation.SuppressLint
 import android.app.AppOpsManager
 import android.content.Context
 import android.location.Criteria
@@ -24,6 +25,9 @@ object MockLocationEngine {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
+    // The legacy overload supports API 26; these Criteria constants have the same
+    // integer values as the ProviderProperties constants introduced in API 31.
+    @SuppressLint("WrongConstant")
     fun addTestProvider(lm: LocationManager) {
         @Suppress("DEPRECATION")
         lm.addTestProvider(
