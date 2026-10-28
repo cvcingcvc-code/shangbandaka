@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<link rel="stylesheet" href="leaflet/leaflet.css">
+<script src="leaflet/leaflet.js"></script>
 <style>
   html, body { margin: 0; padding: 0; height: 100%; background: #fafafa; }
   #map { width: 100%; height: 100%; }
@@ -20,12 +20,34 @@
 <div id="map"></div>
 <script>
   var map = L.map('map', { zoomControl: true }).setView([39.908722, 116.397499], 14);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  var tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors'
   }).addTo(map);
 
   var marker = null;
+  var selectionId = 0;
+  var selectionTimer = null;
+  // Confirmation is enabled only after the map tile containing the selected
+  // point is visibly loaded. A network error never masquerades as a map check.
+  function checkSelectedTile() {
+    if (!selectionId || !marker) return;
+    var point = map.latLngToContainerPoint(marker.getLatLng());
+    var bounds = map.getContainer().getBoundingClientRect();
+    var x = bounds.left + point.x, y = bounds.top + point.y;
+    var loaded = Array.from(map.getContainer().querySelectorAll('img.leaflet-tile-loaded'))
+      .some(function(img) {
+        var r = img.getBoundingClientRect();
+        return img.complete && img.naturalWidth > 0 && x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+      });
+    if (loaded) {
+      clearTimeout(selectionTimer);
+      var id = selectionId;
+      selectionId = 0;
+      if (window.AndroidBridge) AndroidBridge.onMapReady(id);
+    }
+  }
+  tiles.on('tileload', function() { requestAnimationFrame(checkSelectedTile); });
   map.on('click', function(e) {
     var lat = e.latlng.lat, lng = e.latlng.lng;
     if (marker) { marker.setLatLng(e.latlng); }
@@ -50,10 +72,19 @@
   map.on('zoomend', reportMove);
 
   // 供外部设置中心点（搜索结果/初始坐标）
-  window.setCenter = function(lat, lng) {
+  window.setCenter = function(lat, lng, id) {
     map.setView([lat, lng], 16);
     if (marker) { marker.setLatLng([lat, lng]); }
     else { marker = L.marker([lat, lng]).addTo(map); }
+    clearTimeout(selectionTimer);
+    selectionId = id || 0;
+    if (selectionId) {
+      selectionTimer = setTimeout(function() {
+        if (selectionId && window.AndroidBridge) AndroidBridge.onMapUnavailable(selectionId);
+        selectionId = 0;
+      }, 10000);
+      requestAnimationFrame(checkSelectedTile);
+    }
   };
 </script>
 </body>

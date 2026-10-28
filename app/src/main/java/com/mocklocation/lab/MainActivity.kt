@@ -45,7 +45,8 @@ class MainActivity : AppCompatActivity() {
         }
         tvStatus.text = "状态：${status.message}"
         btnStart.isEnabled = !busy
-        btnStop.isEnabled = busy
+        // 停止也用于授权恢复后的显式清理；失败状态不能禁用重试。
+        btnStop.isEnabled = true
         btnSearch.isEnabled = !busy
         btnMap.isEnabled = !busy
         etSearch.isEnabled = !busy
@@ -73,6 +74,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onStart() {
         super.onStart()
+        MockLocationService.reportPendingCleanup(this)
         MockLocationStatus.addListener(statusListener)
         statusListener(MockLocationStatus.current)
     }

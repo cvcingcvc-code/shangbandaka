@@ -23,8 +23,8 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
-        versionCode = 4
-        versionName = "1.1.2-rc.1"
+        versionCode = 5
+        versionName = "1.1.2-rc.2"
     }
 
     buildTypes {

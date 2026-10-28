@@ -100,5 +100,19 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
         shell("appops set com.mocklocation.lab android:mock_location ignore")
         val failed = awaitStatus(setOf(MockLocationStatus.Phase.FAILED), 10000)
         assertTrue(failed.message, failed.message.contains("授权已撤销"))
+        assertTrue("Revoked authorization must preserve the pending cleanup marker",
+            MockLocationService.hasPendingCleanup(ctx))
+        instrumentation.waitForIdleSync()
+        instrumentation.runOnMainSync { MockLocationService.stop(ctx) }
+        val blocked = awaitStatus(setOf(MockLocationStatus.Phase.FAILED), 5000)
+        assertTrue("A stop without authorization must not claim cleanup",
+            MockLocationService.hasPendingCleanup(ctx))
+        assertTrue(blocked.message, blocked.message.contains("无法确认"))
+        shell("appops set com.mocklocation.lab android:mock_location allow")
+        instrumentation.runOnMainSync { MockLocationService.stop(ctx) }
+        val recovered = awaitStatus(setOf(MockLocationStatus.Phase.STOPPED), 10000)
+        assertFalse("Cleanup should be requested again after authorization is restored",
+            MockLocationService.hasPendingCleanup(ctx))
+        assertTrue(recovered.message, recovered.message.contains("请验证"))
     }
 }

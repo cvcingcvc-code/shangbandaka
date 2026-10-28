@@ -2,7 +2,7 @@
 
 Android 开发测试工具，使用系统测试位置 provider；不隐藏模拟位置标记，也不绕过第三方检测。
 
-当前候选版本：`v1.1.2-rc.1`（versionCode 4）。**实体手机验收尚未完成：BLOCKED: PHYSICAL_DEVICE_NOT_TESTED。** 模拟器结果不能证明真机或微信小程序兼容。
+当前候选版本：`v1.1.2-rc.2`（versionCode 5）。**实体手机验收尚未完成：BLOCKED: PHYSICAL_DEVICE_NOT_TESTED。** 模拟器结果不能证明真机或微信小程序兼容。
 
 ## 使用
 

@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.View
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -17,6 +19,8 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Spinner
 import android.widget.ScrollView
+import android.widget.FrameLayout
+import android.view.MotionEvent
 import java.util.Locale
 import android.widget.TextView
 import android.widget.Toast
@@ -47,10 +51,14 @@ class MapPickerActivity : AppCompatActivity() {
         private const val TAG = "MapPickerSearch"
     }
 
-    private lateinit var webView: WebView
+    private var webView: WebView? = null
+    private lateinit var mapContainer: FrameLayout
+    private lateinit var btnLoadMap: Button
     private lateinit var etSearch: EditText
     private lateinit var tvSelected: TextView
     private lateinit var btnConfirm: Button
+    private lateinit var tvMapStatus: TextView
+    private lateinit var btnRetryMap: Button
     private lateinit var resultContainer: LinearLayout
     private lateinit var spScope: Spinner
 
@@ -67,6 +75,7 @@ class MapPickerActivity : AppCompatActivity() {
 
     private var lastSearchAt = 0L
     private var searchGeneration = 0
+    private var mapSelectionId = 0
 
     /** JS 桥：地图点击回传（WGS-84） */
     inner class JsBridge {
@@ -85,22 +94,27 @@ class MapPickerActivity : AppCompatActivity() {
                 mapSpan = if (span > 0) span else 0.08
             }
         }
+
+        @JavascriptInterface
+        fun onMapReady(id: Int) {
+            runOnUiThread {
+                if (id == mapSelectionId && selLat.isFinite() && !isFinishing && !isDestroyed) {
+                    tvMapStatus.text = "地图已加载，请核对标记位置"
+                    btnRetryMap.visibility = View.GONE
+                    btnConfirm.isEnabled = true
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun onMapUnavailable(id: Int) {
+            runOnUiThread { showMapUnavailable(id) }
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
-        val initLat = intent.getDoubleExtra("init_lat", 39.908722)
-        val initLng = intent.getDoubleExtra("init_lng", 116.397499)
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                val lat = if (selLat.isFinite()) selLat else initLat
-                val lng = if (selLng.isFinite()) selLng else initLng
-                view?.evaluateJavascript("window.setCenter && setCenter($lat, $lng)", null)
-            }
-            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
-        }
-        setupWebView()
         // 搜索由主界面的用户操作触发；结果仍需明确选择。
         // 自动化测试入口：Intent 直传搜索词（仍需用户点击结果确认）
         // search_scope: 0=视野优先(默认) 1=仅视野内 2=全球 —— headless 测试 tap 无效，用 extra 控制
@@ -110,16 +124,45 @@ class MapPickerActivity : AppCompatActivity() {
             if (presetScope in 0..2) spScope.setSelection(presetScope)
             etSearch.setText(presetQuery)
             doSearch()
+        } else {
+            // Let the native controls draw first; WebView initialization still runs on the main thread.
+            mapContainer.post { if (!isFinishing && !isDestroyed) startMap() }
         }
     }
 
-    private fun setupWebView() {
-        webView.settings.javaScriptEnabled = true
-        webView.settings.domStorageEnabled = true
-        webView.settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT // 瓦片走 HTTP 缓存
-        webView.addJavascriptInterface(JsBridge(), "AndroidBridge")
-        webView.webChromeClient = WebChromeClient()
-        webView.loadUrl("file:///android_asset/map.html")
+    private fun startMap() {
+        if (webView != null) return
+        btnLoadMap.visibility = View.GONE
+        tvMapStatus.text = "地图加载中，需要网络连接"
+        try {
+            val map = WebView(this)
+            webView = map
+            mapContainer.addView(map, FrameLayout.LayoutParams(-1, -1))
+            map.setOnTouchListener { view, event ->
+                view.parent.parent.requestDisallowInterceptTouchEvent(event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
+                false
+            }
+            map.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    val lat = if (selLat.isFinite()) selLat else intent.getDoubleExtra("init_lat", 39.908722)
+                    val lng = if (selLng.isFinite()) selLng else intent.getDoubleExtra("init_lng", 116.397499)
+                    view?.evaluateJavascript("window.setCenter && setCenter($lat, $lng, $mapSelectionId)", null)
+                }
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+            }
+            map.settings.javaScriptEnabled = true
+            map.settings.domStorageEnabled = true
+            map.settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+            map.addJavascriptInterface(JsBridge(), "AndroidBridge")
+            map.webChromeClient = WebChromeClient()
+            map.loadUrl("file:///android_asset/map.html")
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "地图初始化失败", e)
+            mapContainer.removeAllViews()
+            webView?.destroy()
+            webView = null
+            showMapUnavailable(mapSelectionId)
+        }
     }
 
     private fun buildUi() {
@@ -153,14 +196,41 @@ class MapPickerActivity : AppCompatActivity() {
         val resultScroll = ScrollView(this).apply {
             addView(resultContainer)
             isFillViewport = false
+            setOnTouchListener { view, event ->
+                view.parent.requestDisallowInterceptTouchEvent(event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
+                false
+            }
         }
         root.addView(resultScroll, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, (120 * resources.displayMetrics.density).toInt()))
 
-        // 为地图分配剩余空间，确认按钮固定可见。
-        webView = WebView(this)
-        root.addView(webView, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        // 固定地图高度，外层可滚动，避免小屏幕或键盘挤没地图和确认按钮。
+        mapContainer = FrameLayout(this)
+        btnLoadMap = Button(this).apply {
+            text = "打开地图手动选点"
+            setOnClickListener { startMap() }
+        }
+        mapContainer.addView(btnLoadMap, FrameLayout.LayoutParams(-1, -1))
+        root.addView(mapContainer, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, (240 * resources.displayMetrics.density).toInt()))
+
+        tvMapStatus = TextView(this).apply { text = "地图加载中，需要网络连接" }
+        root.addView(tvMapStatus)
+        btnRetryMap = Button(this).apply {
+            text = "重试加载地图"
+            visibility = View.GONE
+            setOnClickListener {
+                tvMapStatus.text = "正在重新加载地图…"
+                visibility = View.GONE
+                if (selLat.isFinite()) {
+                    btnConfirm.isEnabled = false
+                    val id = ++mapSelectionId
+                    scheduleMapTimeout(id)
+                }
+                if (webView == null) startMap() else webView?.reload()
+            }
+        }
+        root.addView(btnRetryMap)
 
         // 已选坐标（含名称/城市/国家）
         tvSelected = TextView(this).apply {
@@ -174,7 +244,7 @@ class MapPickerActivity : AppCompatActivity() {
             isEnabled = false
         }
         root.addView(btnConfirm)
-        setContentView(root)
+        setContentView(ScrollView(this).apply { addView(root); isFillViewport = true })
 
         btnSearch.setOnClickListener { doSearch() }
         btnConfirm.setOnClickListener { confirmAndReturn() }
@@ -196,6 +266,7 @@ class MapPickerActivity : AppCompatActivity() {
         val generation = ++searchGeneration
         selLat = Double.NaN
         selLng = Double.NaN
+        ++mapSelectionId
         btnConfirm.isEnabled = false
         tvSelected.text = "请选择搜索结果或点击地图"
         resultContainer.removeAllViews()
@@ -318,9 +389,27 @@ class MapPickerActivity : AppCompatActivity() {
         selName = name
         selDetail = detail
         tvSelected.text = "已选: $name\n$detail\n%.6f, %.6f（WGS-84）".format(lat, lng)
-        btnConfirm.isEnabled = true
+        btnConfirm.isEnabled = false
+        btnRetryMap.visibility = View.GONE
+        tvMapStatus.text = "正在加载所选位置的地图，请稍候…"
+        val id = ++mapSelectionId
+        scheduleMapTimeout(id)
         // 地图移动到对应位置，供用户检查确认
-        webView.evaluateJavascript("window.setCenter && setCenter($lat, $lng)", null)
+        if (webView == null) startMap()
+        else webView?.evaluateJavascript("window.setCenter && setCenter($lat, $lng, $id)", null)
+    }
+
+    private fun scheduleMapTimeout(id: Int) {
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (id == mapSelectionId && !btnConfirm.isEnabled) showMapUnavailable(id)
+        }, 12000)
+    }
+
+    private fun showMapUnavailable(id: Int) {
+        if (id != mapSelectionId || isFinishing || isDestroyed || btnConfirm.isEnabled) return
+        tvMapStatus.text = "无法加载所选位置的地图，请检查网络后重试；也可返回手动输入坐标。"
+        btnRetryMap.visibility = View.VISIBLE
+        btnConfirm.isEnabled = false
     }
 
     private fun confirmAndReturn() {
@@ -351,7 +440,7 @@ class MapPickerActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        webView.destroy()
+        webView?.destroy()
         super.onDestroy()
     }
 

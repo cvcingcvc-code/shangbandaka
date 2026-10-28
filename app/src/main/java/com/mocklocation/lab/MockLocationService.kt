@@ -92,6 +92,8 @@ class MockLocationService : Service() {
                 registered = false
             }
             MockLocationStatus.update(MockLocationStatus.Phase.REGISTERING, "正在注册测试位置")
+            // Persist before registration: Android can kill this process without onDestroy().
+            check(setCleanupPending(this, true)) { "无法保存测试位置清理状态" }
             MockLocationEngine.addTestProvider(lm)
             registered = true
             // App-op may change between the preflight and the injection.
@@ -132,9 +134,13 @@ class MockLocationService : Service() {
             try { lm.removeUpdates(reader) } catch (e: Exception) { Log.w(TAG, "Failed to remove location listener", e) }
             listening = false
         }
-        if (!registered) return null
+        if (!registered) return if (isCleanupPending(this)) CLEANUP_REQUIRED else null
         return try {
+            if (!MockLocationEngine.isMockAppSelected(this)) return CLEANUP_REQUIRED
             MockLocationEngine.removeTestProvider(lm)
+            // Some Android implementations silently ignore an operation after AppOps changes.
+            if (!MockLocationEngine.isMockAppSelected(this)) return CLEANUP_REQUIRED
+            if (!setCleanupPending(this, false)) return "无法保存清理状态；请重新选择本应用并重试停止"
             registered = false
             null
         } catch (e: Exception) {
@@ -148,9 +154,14 @@ class MockLocationService : Service() {
         handler.removeCallbacksAndMessages(null)
         val cleanupError = cleanupProvider()
         if (cleanupError != null) {
-            MockLocationStatus.update(MockLocationStatus.Phase.FAILED, "清理测试位置失败：$cleanupError")
+            val previous = MockLocationStatus.current
+            val detail = if (previous.phase == MockLocationStatus.Phase.FAILED) {
+                if (previous.message.contains(cleanupError)) previous.message
+                else "${previous.message}；清理测试位置失败：$cleanupError"
+            } else "清理测试位置失败：$cleanupError"
+            MockLocationStatus.update(MockLocationStatus.Phase.FAILED, detail)
         } else if (stopRequested) {
-            MockLocationStatus.update(MockLocationStatus.Phase.STOPPED, "已停止；测试位置已释放")
+            MockLocationStatus.update(MockLocationStatus.Phase.STOPPED, "已请求停止并移除测试位置；请验证系统定位是否恢复")
         } else if (MockLocationStatus.current.phase != MockLocationStatus.Phase.FAILED) {
             MockLocationStatus.update(MockLocationStatus.Phase.FAILED, "定位服务已退出")
         }
@@ -194,13 +205,35 @@ class MockLocationService : Service() {
         private const val TAG = "MockLocationService"
         private const val CHANNEL_ID = "mock_location_channel"
         private const val NOTIF_ID = 1001
+        private const val PREFS = "mock_location_state"
+        private const val KEY_CLEANUP_PENDING = "cleanup_pending"
+        private const val CLEANUP_REQUIRED = "无法确认测试位置是否释放；请重新选择本应用为模拟位置应用后点击停止，重试移除当前 GPS 测试位置"
         const val EXTRA_LAT = "extra_lat"
         const val EXTRA_LNG = "extra_lng"
         private var stopRequested = false
         private var requestId = 0L
 
+        private fun isCleanupPending(ctx: Context): Boolean =
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_CLEANUP_PENDING, false)
+
+        fun hasPendingCleanup(ctx: Context): Boolean = isCleanupPending(ctx)
+
+        private fun setCleanupPending(ctx: Context, pending: Boolean): Boolean =
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_CLEANUP_PENDING, pending).commit()
+
+        /** A persisted marker is not proof of a running service. Never restart from it. */
+        fun reportPendingCleanup(ctx: Context) {
+            if (isCleanupPending(ctx) && MockLocationStatus.current.phase == MockLocationStatus.Phase.IDLE) {
+                MockLocationStatus.update(MockLocationStatus.Phase.FAILED, CLEANUP_REQUIRED)
+            }
+        }
+
         fun start(ctx: Context, lat: Double, lng: Double) {
             check(Looper.myLooper() == Looper.getMainLooper())
+            if (isCleanupPending(ctx)) {
+                MockLocationStatus.update(MockLocationStatus.Phase.FAILED, CLEANUP_REQUIRED)
+                return
+            }
             val id = ++requestId
             stopRequested = false
             MockLocationStatus.update(MockLocationStatus.Phase.PREPARING, "准备启动")
@@ -227,10 +260,26 @@ class MockLocationService : Service() {
             check(Looper.myLooper() == Looper.getMainLooper())
             ++requestId
             stopRequested = true
+            MockLocationStatus.update(MockLocationStatus.Phase.PREPARING, "正在停止并清理测试位置")
             try {
                 if (!ctx.stopService(Intent(ctx, MockLocationService::class.java))) {
                     stopRequested = false
-                    MockLocationStatus.update(MockLocationStatus.Phase.STOPPED, "已停止")
+                    if (!isCleanupPending(ctx)) {
+                        MockLocationStatus.update(MockLocationStatus.Phase.STOPPED, "没有待清理记录；请验证系统定位状态")
+                    } else if (!MockLocationEngine.isMockAppSelected(ctx)) {
+                        MockLocationStatus.update(MockLocationStatus.Phase.FAILED, CLEANUP_REQUIRED)
+                    } else {
+                        // Explicit user retry: the GPS test provider is system-wide and its owner
+                        // cannot be verified via the public API.
+                        val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                        MockLocationEngine.removeTestProvider(lm)
+                        if (!MockLocationEngine.isMockAppSelected(ctx) || !setCleanupPending(ctx, false)) {
+                            MockLocationStatus.update(MockLocationStatus.Phase.FAILED, CLEANUP_REQUIRED)
+                        } else {
+                            MockLocationStatus.update(MockLocationStatus.Phase.STOPPED,
+                                "已请求移除当前 GPS 测试位置；请验证系统定位是否恢复")
+                        }
+                    }
                 }
             } catch (e: Exception) {
                 stopRequested = false
