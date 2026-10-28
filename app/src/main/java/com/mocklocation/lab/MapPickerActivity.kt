@@ -1,26 +1,25 @@
 package com.mocklocation.lab
 
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.content.Context
+import android.text.TextUtils
 import android.view.View
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.AdapterView
-import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
-import android.widget.Spinner
 import android.widget.ScrollView
 import android.widget.FrameLayout
-import android.view.MotionEvent
 import java.util.Locale
 import android.widget.TextView
 import android.widget.Toast
@@ -33,17 +32,8 @@ import java.net.URL
 import java.net.URLEncoder
 
 /**
- * 地图选点页 v1.1.1：WebView + Leaflet（OSM 瓦片，免费无 Key）。
- * P0 搜索准确性修复：
- * - 结果显示 地点名称 + 城市 + 国家（addressdetails=1 结构化）
- * - 地图可视区域影响排序（viewbox + bounded=0 视野优先；可选 仅视野内 / 全球）
- * - 全球结果可按地图视野优先排列，不默认限制国家
- * - 用户必须明确点击结果选择，绝不自动选第一条
- * - 选中后地图移动到对应位置并显示完整信息，供检查确认坐标
- * P1 稳定性：
- * - Nominatim 1 req/s 节流（仅用户点搜索触发，无自动补全）
- * - 应用标识 UA、OSM 署名（map.html）、瓦片浏览器缓存
- * - 搜索失败不影响地图点选与手动输入坐标
+ * 全球搜索后由用户选择具体结果，再在地图确认；无自动补全或自动选点。
+ * Nominatim 请求仅由搜索操作触发，并在本页面按每秒一次节流。
  */
 class MapPickerActivity : AppCompatActivity() {
 
@@ -60,38 +50,26 @@ class MapPickerActivity : AppCompatActivity() {
     private lateinit var tvMapStatus: TextView
     private lateinit var btnRetryMap: Button
     private lateinit var resultContainer: LinearLayout
-    private lateinit var spScope: Spinner
+    private lateinit var searchPanel: LinearLayout
+    private lateinit var mapPanel: LinearLayout
+    private lateinit var resultsLabel: TextView
 
     private var selLat = Double.NaN
     private var selLng = Double.NaN
     private var selName = ""
     private var selDetail = ""
 
-    // 当前地图中心（JS 回传，用于 viewbox 与 cn 判断）
-    private var mapCenterLat = 39.908722
-    private var mapCenterLng = 116.397499
-    // 当前地图视野跨度（JS 回传）
-    private var mapSpan = 0.08
-
     private var lastSearchAt = 0L
     private var searchGeneration = 0
     private var mapSelectionId = 0
+    private var lastResults: List<NomaPoi> = emptyList()
 
     /** JS 桥：地图点击回传（WGS-84） */
     inner class JsBridge {
         @JavascriptInterface
         fun onMapClick(lat: Double, lng: Double) {
             runOnUiThread {
-                pick(lat, lng, "地图点选", "")
-            }
-        }
-
-        @JavascriptInterface
-        fun onMapMove(lat: Double, lng: Double, span: Double) {
-            runOnUiThread {
-                mapCenterLat = lat
-                mapCenterLng = lng
-                mapSpan = if (span > 0) span else 0.08
+                if (!isDestroyed && !isFinishing) pick(lat, lng, "地图点选", "", fromMap = true)
             }
         }
 
@@ -115,19 +93,41 @@ class MapPickerActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         buildUi()
+        if (savedInstanceState != null) {
+            // Do not restore a map confirmation across recreation. Restore the list so
+            // the user can explicitly pick and confirm again without another request.
+            etSearch.setText(savedInstanceState.getString("query", ""))
+            @Suppress("DEPRECATION")
+            val saved = savedInstanceState.getParcelableArrayList<Bundle>("results")
+            if (saved != null) renderResults(saved.map {
+                NomaPoi(it.getString("name", ""), it.getString("city", ""), it.getString("country", ""),
+                    it.getDouble("lat"), it.getDouble("lng"), it.getString("display", ""))
+            })
+            else resultsLabel.text = "请点击搜索，再选择具体地点"
+            return
+        }
         // 搜索由主界面的用户操作触发；结果仍需明确选择。
-        // 自动化测试入口：Intent 直传搜索词（仍需用户点击结果确认）
-        // search_scope: 0=视野优先(默认) 1=仅视野内 2=全球 —— headless 测试 tap 无效，用 extra 控制
+        // 主界面搜索词带入；仍需用户点击结果并在地图确认。
         val presetQuery = intent.getStringExtra("search_query")
         if (!presetQuery.isNullOrBlank()) {
-            val presetScope = intent.getIntExtra("search_scope", 0)
-            if (presetScope in 0..2) spScope.setSelection(presetScope)
             etSearch.setText(presetQuery)
             doSearch()
         } else {
             // Let the native controls draw first; WebView initialization still runs on the main thread.
+            showMapPanel()
             mapContainer.post { if (!isFinishing && !isDestroyed) startMap() }
         }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("query", etSearch.text.toString())
+        if (lastResults.isNotEmpty()) {
+            outState.putParcelableArrayList("results", ArrayList(lastResults.map { p -> Bundle().apply {
+                putString("name", p.name); putString("city", p.city); putString("country", p.country)
+                putDouble("lat", p.lat); putDouble("lng", p.lng); putString("display", p.displayName)
+            } }))
+        }
+        super.onSaveInstanceState(outState)
     }
 
     private fun startMap() {
@@ -138,14 +138,11 @@ class MapPickerActivity : AppCompatActivity() {
             val map = WebView(this)
             webView = map
             mapContainer.addView(map, FrameLayout.LayoutParams(-1, -1))
-            map.setOnTouchListener { view, event ->
-                view.parent.parent.requestDisallowInterceptTouchEvent(event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
-                false
-            }
             map.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
                     val lat = if (selLat.isFinite()) selLat else intent.getDoubleExtra("init_lat", 39.908722)
                     val lng = if (selLng.isFinite()) selLng else intent.getDoubleExtra("init_lng", 116.397499)
+                    if (!selLat.isFinite()) tvMapStatus.text = "点击地图选择位置；地图需要网络连接"
                     view?.evaluateJavascript("window.setCenter && setCenter($lat, $lng, $mapSelectionId)", null)
                 }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
@@ -172,50 +169,66 @@ class MapPickerActivity : AppCompatActivity() {
             setPadding(pad, pad, pad, pad)
         }
 
-        // 搜索行
+        // 搜索与地图分成两个状态，结果列表和地图都获得主要屏幕空间。
+        searchPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val searchRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         etSearch = EditText(this).apply {
             hint = "搜索城市/地标/商家"
             setSingleLine(true)
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_SEARCH) { doSearch(); true } else false
+            }
         }
         val btnSearch = Button(this).apply { text = "搜索" }
         searchRow.addView(etSearch, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         searchRow.addView(btnSearch)
-        root.addView(searchRow)
-
-        // 搜索范围：视野优先（默认）/ 仅视野内 / 全球
-        spScope = Spinner(this).apply {
-            adapter = ArrayAdapter(this@MapPickerActivity,
-                android.R.layout.simple_spinner_dropdown_item,
-                listOf("视野优先（全球）", "仅当前视野内", "全球搜索"))
+        searchPanel.addView(searchRow)
+        resultsLabel = TextView(this).apply {
+            text = "全球搜索：点击具体地点，再在地图上确认"
+            setPadding(0, pad / 2, 0, pad / 2)
         }
-        root.addView(spScope)
+        searchPanel.addView(resultsLabel)
 
-        // 搜索结果列表
+        // 搜索结果可滚动，独立条目显示完整地址以区分重名地点。
         resultContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val resultScroll = ScrollView(this).apply {
             addView(resultContainer)
             isFillViewport = false
-            setOnTouchListener { view, event ->
-                view.parent.requestDisallowInterceptTouchEvent(event.actionMasked != MotionEvent.ACTION_UP && event.actionMasked != MotionEvent.ACTION_CANCEL)
-                false
-            }
         }
-        root.addView(resultScroll, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, (120 * resources.displayMetrics.density).toInt()))
+        searchPanel.addView(resultScroll, LinearLayout.LayoutParams(-1, 0, 1f))
+        searchPanel.addView(Button(this).apply {
+            text = "在地图上手动选点"
+            setOnClickListener {
+                hideKeyboard()
+                showMapPanel()
+                startMap()
+            }
+        })
+        root.addView(searchPanel, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        // 固定地图高度，外层可滚动，避免小屏幕或键盘挤没地图和确认按钮。
+        mapPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; visibility = View.GONE }
+        mapPanel.addView(Button(this).apply {
+            text = "更换地点 / 搜索"
+            setOnClickListener { showSearchPanel() }
+        })
+        tvSelected = TextView(this).apply {
+            text = "尚未选点：点击地图选择位置"
+            maxLines = 3
+            ellipsize = TextUtils.TruncateAt.END
+            setPadding(0, pad / 2, 0, pad / 2)
+        }
+        mapPanel.addView(tvSelected)
         mapContainer = FrameLayout(this)
         btnLoadMap = Button(this).apply {
-            text = "打开地图手动选点"
+            text = "加载地图"
             setOnClickListener { startMap() }
         }
         mapContainer.addView(btnLoadMap, FrameLayout.LayoutParams(-1, -1))
-        root.addView(mapContainer, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT, (240 * resources.displayMetrics.density).toInt()))
+        mapPanel.addView(mapContainer, LinearLayout.LayoutParams(-1, 0, 1f))
 
-        tvMapStatus = TextView(this).apply { text = "地图加载中，需要网络连接" }
-        root.addView(tvMapStatus)
+        tvMapStatus = TextView(this).apply { text = "地图需要网络连接" }
+        mapPanel.addView(tvMapStatus)
         btnRetryMap = Button(this).apply {
             text = "重试加载地图"
             visibility = View.GONE
@@ -230,24 +243,45 @@ class MapPickerActivity : AppCompatActivity() {
                 if (webView == null) startMap() else webView?.reload()
             }
         }
-        root.addView(btnRetryMap)
-
-        // 已选坐标（含名称/城市/国家）
-        tvSelected = TextView(this).apply {
-            text = "尚未选点（搜索选择或点击地图）"
-            setPadding(0, pad, 0, pad / 2)
-        }
-        root.addView(tvSelected)
+        mapPanel.addView(btnRetryMap)
 
         btnConfirm = Button(this).apply {
             text = "确认选点并返回"
             isEnabled = false
         }
-        root.addView(btnConfirm)
-        setContentView(ScrollView(this).apply { addView(root); isFillViewport = true })
+        mapPanel.addView(btnConfirm)
+        root.addView(mapPanel, LinearLayout.LayoutParams(-1, 0, 1f))
+        setContentView(root)
 
         btnSearch.setOnClickListener { doSearch() }
         btnConfirm.setOnClickListener { confirmAndReturn() }
+    }
+
+    private fun hideKeyboard() {
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(etSearch.windowToken, 0)
+        etSearch.clearFocus()
+    }
+
+    private fun showMapPanel() {
+        searchPanel.visibility = View.GONE
+        mapPanel.visibility = View.VISIBLE
+    }
+
+    private fun showSearchPanel() {
+        ++mapSelectionId
+        selLat = Double.NaN
+        selLng = Double.NaN
+        btnConfirm.isEnabled = false
+        tvSelected.text = "尚未选点：点击地图选择位置"
+        mapPanel.visibility = View.GONE
+        searchPanel.visibility = View.VISIBLE
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onBackPressed() {
+        if (mapPanel.visibility == View.VISIBLE && lastResults.isNotEmpty()) showSearchPanel()
+        else super.onBackPressed()
     }
 
     /** 搜索请求（用户点按钮触发，无自动补全；1 req/s 节流） */
@@ -262,20 +296,19 @@ class MapPickerActivity : AppCompatActivity() {
             Toast.makeText(this, "请输入关键词", Toast.LENGTH_SHORT).show()
             return
         }
+        hideKeyboard()
         lastSearchAt = now
         val generation = ++searchGeneration
+        lastResults = emptyList()
         selLat = Double.NaN
         selLng = Double.NaN
         ++mapSelectionId
         btnConfirm.isEnabled = false
-        tvSelected.text = "请选择搜索结果或点击地图"
+        tvSelected.text = "尚未选点：点击地图选择位置"
         resultContainer.removeAllViews()
         resultContainer.addView(TextView(this).apply { text = "搜索中…" })
-        // P0 诊断：主线程先快照请求参数，避免后台线程读 UI 控件的竞态
-        val scopePos = spScope.selectedItemPosition
-        val vbParam = viewboxParam()
-        val inChina = isCenterInChina()
-        android.util.Log.i(TAG, "doSearch kw='$kw' scope=$scopePos viewbox=$vbParam centerInChina=$inChina")
+        resultsLabel.text = "全球搜索中…"
+        android.util.Log.i(TAG, "doSearch kw='$kw' scope=global")
         Thread {
             var finalUrl = ""
             try {
@@ -285,16 +318,6 @@ class MapPickerActivity : AppCompatActivity() {
                     .append("?q=").append(enc)
                     .append("&format=json&limit=8&accept-language=zh-CN")
                     .append("&addressdetails=1") // 结构化城市/国家
-                when (scopePos) {
-                    0 -> { // 视野优先：viewbox 偏向排序，不硬限制国家
-                        sb.append("&viewbox=").append(vbParam).append("&bounded=0")
-                        // 视野只影响排序，不限制国家。
-                    }
-                    1 -> { // 仅当前视野内
-                        sb.append("&viewbox=").append(vbParam).append("&bounded=1")
-                    }
-                    else -> { /* 全球：无附加参数（无 countrycodes/viewbox/bounded） */ }
-                }
                 finalUrl = sb.toString()
                 android.util.Log.i(TAG, "request GET $finalUrl")
                 val conn = URL(finalUrl).openConnection() as HttpURLConnection
@@ -316,7 +339,7 @@ class MapPickerActivity : AppCompatActivity() {
                     val o = arr.getJSONObject(i)
                     val lat = o.optDouble("lat", Double.NaN)
                     val lng = o.optDouble("lon", Double.NaN)
-                    if (lat.isNaN() || lng.isNaN()) continue
+                    if (!lat.isFinite() || !lng.isFinite() || lat !in -90.0..90.0 || lng !in -180.0..180.0) continue
                     val name = o.optString("name", "").ifBlank {
                         o.optString("display_name", "").substringBefore(',')
                     }
@@ -329,7 +352,6 @@ class MapPickerActivity : AppCompatActivity() {
                 }
                 runOnUiThread { if (!isDestroyed && !isFinishing && generation == searchGeneration) renderResults(out) }
                 android.util.Log.i(TAG, "parsed count=${out.size} first=${out.firstOrNull()?.let { "${it.name}|${it.city}|${it.country}|${it.lat},${it.lng}" } ?: "none"}")
-                if (out.isEmpty()) runUiToast("无结果（仍可地图点选/手输坐标）", generation)
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "search exception url=$finalUrl", e)
                 runUiToast("搜索错误: ${e.javaClass.simpleName}: ${e.message}（仍可地图点选/手输坐标）", generation)
@@ -342,32 +364,21 @@ class MapPickerActivity : AppCompatActivity() {
             if (!isDestroyed && !isFinishing && generation == searchGeneration) {
                 // P0-6：错误必须写进结果区（UI dump 可捕获），不能只靠 Toast
                 resultContainer.removeAllViews()
+                resultsLabel.text = "搜索未完成，请重试或手动选点"
                 resultContainer.addView(TextView(this).apply {
                     text = "⚠️ $msg"
                     setPadding(0, 8, 0, 8)
                 })
-                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                if (searchPanel.visibility == View.VISIBLE) Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
             }
         }
     }
 
-    /** viewbox=left,top,right,bottom（当前地图可视区域） */
-    private fun viewboxParam(): String {
-        val d = mapSpan
-        val left = mapCenterLng - d
-        val right = mapCenterLng + d
-        val top = mapCenterLat + d * 0.6
-        val bottom = mapCenterLat - d * 0.6
-        return String.format(Locale.US, "%.5f,%.5f,%.5f,%.5f", left, top, right, bottom)
-    }
-
-    /** 地图中心是否明确在中国境内（粗判即可） */
-    private fun isCenterInChina(): Boolean {
-        return !CoordConverter.outOfChina(mapCenterLat, mapCenterLng)
-    }
-
     private fun renderResults(list: List<NomaPoi>) {
+        lastResults = list
         resultContainer.removeAllViews()
+        resultsLabel.text = if (list.isEmpty()) "没有找到地点，请换个关键词"
+            else "找到 ${list.size} 个地点，请选择具体结果"
         for (p in list.take(8)) {
             val tv = TextView(this).apply {
                 // 必须显示：地点名称 + 城市 + 国家
@@ -376,19 +387,29 @@ class MapPickerActivity : AppCompatActivity() {
                 setPadding(inset, inset, inset, inset)
                 minHeight = (48 * resources.displayMetrics.density).toInt()
                 isFocusable = true
+                textSize = 16f
+                val attrs = obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackground))
+                background = attrs.getDrawable(0)
+                attrs.recycle()
                 setOnClickListener { pick(p.lat, p.lng, p.name, "${p.city}, ${p.country}") }
             }
             resultContainer.addView(tv)
+            resultContainer.addView(View(this).apply {
+                setBackgroundColor(0xffdddddd.toInt())
+            }, LinearLayout.LayoutParams(-1, (resources.displayMetrics.density).toInt().coerceAtLeast(1)))
         }
     }
 
     /** 明确选择：用户点击某条结果/地图某点后才置为已选，绝不自动选 */
-    private fun pick(lat: Double, lng: Double, name: String, detail: String) {
+    private fun pick(lat: Double, lng: Double, name: String, detail: String, fromMap: Boolean = false) {
+        if (!lat.isFinite() || !lng.isFinite() || lat !in -90.0..90.0 || lng !in -180.0..180.0) return
+        hideKeyboard()
+        showMapPanel()
         selLat = lat
         selLng = lng
         selName = name
         selDetail = detail
-        tvSelected.text = "已选: $name\n$detail\n%.6f, %.6f（WGS-84）".format(lat, lng)
+        tvSelected.text = "已选: $name\n$detail\n" + String.format(Locale.US, "%.6f, %.6f（WGS-84）", lat, lng)
         btnConfirm.isEnabled = false
         btnRetryMap.visibility = View.GONE
         tvMapStatus.text = "正在加载所选位置的地图，请稍候…"
@@ -396,7 +417,11 @@ class MapPickerActivity : AppCompatActivity() {
         scheduleMapTimeout(id)
         // 地图移动到对应位置，供用户检查确认
         if (webView == null) startMap()
-        else webView?.evaluateJavascript("window.setCenter && setCenter($lat, $lng, $id)", null)
+        else mapPanel.post {
+            if (id == mapSelectionId && !isDestroyed && !isFinishing) {
+                webView?.evaluateJavascript("window.setCenter && setCenter($lat, $lng, $id, $fromMap)", null)
+            }
+        }
     }
 
     private fun scheduleMapTimeout(id: Int) {
@@ -407,7 +432,8 @@ class MapPickerActivity : AppCompatActivity() {
 
     private fun showMapUnavailable(id: Int) {
         if (id != mapSelectionId || isFinishing || isDestroyed || btnConfirm.isEnabled) return
-        tvMapStatus.text = "无法加载所选位置的地图，请检查网络后重试；也可返回手动输入坐标。"
+        tvMapStatus.text = if (selLat.isFinite()) "无法加载所选位置的地图，请检查网络后重试；也可返回手动输入坐标。"
+            else "无法加载地图，请检查网络后重试，或搜索地点。"
         btnRetryMap.visibility = View.VISIBLE
         btnConfirm.isEnabled = false
     }

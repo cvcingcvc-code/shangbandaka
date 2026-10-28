@@ -11,6 +11,8 @@ import android.provider.Settings
 import android.text.InputType
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -103,15 +105,18 @@ class MainActivity : AppCompatActivity() {
         etSearch = EditText(this).apply {
             hint = "输入城市、地标或具体地点"
             setSingleLine(true)
+            imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                    searchPlace()
+                    true
+                } else false
+            }
         }
         root.addView(etSearch)
         btnSearch = Button(this).apply {
             text = "搜索地点"
-            setOnClickListener {
-                val query = etSearch.text.toString().trim()
-                if (query.isEmpty()) Toast.makeText(this@MainActivity, "请输入地点", Toast.LENGTH_SHORT).show()
-                else openMapPicker(query)
-            }
+            setOnClickListener { searchPlace() }
         }
         root.addView(btnSearch)
         btnMap = Button(this).apply {
@@ -171,6 +176,17 @@ class MainActivity : AppCompatActivity() {
             .putExtra("init_lat", targetLat).putExtra("init_lng", targetLng)
         if (!query.isNullOrBlank()) i.putExtra("search_query", query)
         startActivityForResult(i, 2001)
+    }
+
+    private fun searchPlace() {
+        val query = etSearch.text.toString().trim()
+        if (query.isEmpty()) {
+            Toast.makeText(this, "请输入地点", Toast.LENGTH_SHORT).show()
+            return
+        }
+        (getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+            .hideSoftInputFromWindow(etSearch.windowToken, 0)
+        openMapPicker(query)
     }
 
     @Deprecated("Deprecated in Java")

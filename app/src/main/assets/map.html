@@ -28,6 +28,12 @@
   var marker = null;
   var selectionId = 0;
   var selectionTimer = null;
+  // Manual map mode also needs an actionable error if no tile ever loads.
+  setTimeout(function() {
+    if (!selectionId && !map.getContainer().querySelector('img.leaflet-tile-loaded') && window.AndroidBridge) {
+      AndroidBridge.onMapUnavailable(0);
+    }
+  }, 10000);
   // Confirmation is enabled only after the map tile containing the selected
   // point is visibly loaded. A network error never masquerades as a map check.
   function checkSelectedTile() {
@@ -58,22 +64,10 @@
     }
   });
 
-  // 地图移动结束：回传中心点与视野跨度（供 Android 计算 viewbox 影响搜索排序）
-  function reportMove() {
-    if (!window.AndroidBridge || !AndroidBridge.onMapMove) return;
-    var c = map.getCenter();
-    var b = map.getBounds();
-    // span 取经度半跨度（度），与 Android 端 viewboxParam 的 d 语义一致
-    var span = (b.getEast() - b.getWest()) / 2;
-    if (!(span > 0)) span = 0.08;
-    AndroidBridge.onMapMove(c.lat, c.lng, span);
-  }
-  map.on('moveend', reportMove);
-  map.on('zoomend', reportMove);
-
   // 供外部设置中心点（搜索结果/初始坐标）
-  window.setCenter = function(lat, lng, id) {
-    map.setView([lat, lng], 16);
+  window.setCenter = function(lat, lng, id, keepZoom) {
+    map.invalidateSize({animate: false});
+    map.setView([lat, lng], keepZoom ? map.getZoom() : 16);
     if (marker) { marker.setLatLng([lat, lng]); }
     else { marker = L.marker([lat, lng]).addTo(map); }
     clearTimeout(selectionTimer);
