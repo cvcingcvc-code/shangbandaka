@@ -86,7 +86,12 @@ class MapPickerActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun onMapUnavailable(id: Int) {
-            runOnUiThread { showMapUnavailable(id) }
+            runOnUiThread {
+                // Manual mode has no selected point and uses id 0 in the page.
+                if (id == 0 && !selLat.isFinite() && mapPanel.visibility == View.VISIBLE) {
+                    showMapUnavailable(mapSelectionId)
+                } else showMapUnavailable(id)
+            }
         }
     }
 
@@ -143,7 +148,8 @@ class MapPickerActivity : AppCompatActivity() {
                     val lat = if (selLat.isFinite()) selLat else intent.getDoubleExtra("init_lat", 39.908722)
                     val lng = if (selLng.isFinite()) selLng else intent.getDoubleExtra("init_lng", 116.397499)
                     if (!selLat.isFinite()) tvMapStatus.text = "点击地图选择位置；地图需要网络连接"
-                    view?.evaluateJavascript("window.setCenter && setCenter($lat, $lng, $mapSelectionId)", null)
+                    val selectionId = if (selLat.isFinite()) mapSelectionId else 0
+                    view?.evaluateJavascript("window.setCenter && setCenter($lat, $lng, $selectionId)", null)
                 }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
             }
@@ -266,6 +272,12 @@ class MapPickerActivity : AppCompatActivity() {
     private fun showMapPanel() {
         searchPanel.visibility = View.GONE
         mapPanel.visibility = View.VISIBLE
+        // A WebView that was GONE may have a stale Leaflet viewport size.
+        mapPanel.post {
+            if (!isDestroyed && !isFinishing && mapPanel.visibility == View.VISIBLE) {
+                webView?.evaluateJavascript("window.refreshMap && refreshMap()", null)
+            }
+        }
     }
 
     private fun showSearchPanel() {
@@ -274,6 +286,7 @@ class MapPickerActivity : AppCompatActivity() {
         selLng = Double.NaN
         btnConfirm.isEnabled = false
         tvSelected.text = "尚未选点：点击地图选择位置"
+        webView?.evaluateJavascript("window.clearSelection && clearSelection()", null)
         mapPanel.visibility = View.GONE
         searchPanel.visibility = View.VISIBLE
     }
@@ -324,7 +337,7 @@ class MapPickerActivity : AppCompatActivity() {
                 conn.connectTimeout = 8000
                 conn.readTimeout = 8000
                 conn.requestMethod = "GET"
-                conn.setRequestProperty("User-Agent", "MockLocationLab/1.1.1 (Android debug tool)")
+                conn.setRequestProperty("User-Agent", "MockLocationLab (https://github.com/cvcingcvc-code/shangbandaka)")
                 val code = conn.responseCode
                 val body = if (code == 200) readStream(conn) else ""
                 android.util.Log.i(TAG, "response http=$code bodyLen=${body.length} head=${body.take(150)}")

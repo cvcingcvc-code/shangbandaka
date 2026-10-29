@@ -70,6 +70,13 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
         assertTrue(status.message, status.message.contains("模拟位置信息应用"))
     }
 
+    fun testManifestDeclaresMockLocationForSystemPicker() {
+        @Suppress("DEPRECATION")
+        val info = ctx.packageManager.getPackageInfo(ctx.packageName, PackageManager.GET_PERMISSIONS)
+        assertTrue("Mock location declaration is required for the system app picker",
+            info.requestedPermissions?.contains("android.permission.ACCESS_MOCK_LOCATION") == true)
+    }
+
     fun testInjectionWithoutRegisteredProviderPropagatesError() {
         shell("appops set com.mocklocation.lab android:mock_location allow")
         instrumentation.runOnMainSync { MockLocationService.stop(ctx) }

@@ -1,6 +1,6 @@
 # 候选版安装和实体手机测试
 
-候选版本 `v1.1.2-rc.3`，包名 `com.mocklocation.lab`，Android 8.0 及以上。真实手机验收状态：**BLOCKED: PHYSICAL_DEVICE_NOT_TESTED**。
+候选版本 `v1.1.2-rc.5`，包名 `com.mocklocation.lab`，Android 8.0 及以上。真实手机验收状态：**BLOCKED: PHYSICAL_DEVICE_NOT_TESTED**。
 
 1. 获取对应候选 APK 并核对公布的 SHA-256。优先直接覆盖安装；如系统提示签名冲突，不要卸载，先备份应用内重要数据，再由用户决定是否卸载旧包。不同签名无法覆盖升级。
 2. 开启系统定位，授予精确位置权限；在开发者选项「选择模拟位置信息应用」中选择 Mock Location Lab。

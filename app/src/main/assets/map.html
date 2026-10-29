@@ -28,6 +28,12 @@
   var marker = null;
   var selectionId = 0;
   var selectionTimer = null;
+  window.refreshMap = function() { map.invalidateSize({animate: false}); };
+  window.clearSelection = function() {
+    clearTimeout(selectionTimer);
+    selectionId = 0;
+    if (marker) { map.removeLayer(marker); marker = null; }
+  };
   // Manual map mode also needs an actionable error if no tile ever loads.
   setTimeout(function() {
     if (!selectionId && !map.getContainer().querySelector('img.leaflet-tile-loaded') && window.AndroidBridge) {
@@ -68,8 +74,12 @@
   window.setCenter = function(lat, lng, id, keepZoom) {
     map.invalidateSize({animate: false});
     map.setView([lat, lng], keepZoom ? map.getZoom() : 16);
-    if (marker) { marker.setLatLng([lat, lng]); }
-    else { marker = L.marker([lat, lng]).addTo(map); }
+    if (id) {
+      if (marker) { marker.setLatLng([lat, lng]); }
+      else { marker = L.marker([lat, lng]).addTo(map); }
+    } else {
+      window.clearSelection();
+    }
     clearTimeout(selectionTimer);
     selectionId = id || 0;
     if (selectionId) {

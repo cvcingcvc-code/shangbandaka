@@ -37,9 +37,13 @@ class MockLocationService : Service() {
             if (running && mock && kotlin.math.abs(location.latitude - lat) < 0.000001 &&
                 kotlin.math.abs(location.longitude - lng) < 0.000001 &&
                 MockLocationStatus.current.phase == MockLocationStatus.Phase.REGISTERING) {
-                MockLocationStatus.update(MockLocationStatus.Phase.SUCCESS,
-                    "模拟已成功：系统定位接口读取到 %.6f, %.6f".format(java.util.Locale.US, lat, lng))
-                updateNotification("已注入 %.6f, %.6f".format(java.util.Locale.US, lat, lng))
+                try {
+                    updateNotification("已注入 %.6f, %.6f".format(java.util.Locale.US, lat, lng))
+                    MockLocationStatus.update(MockLocationStatus.Phase.SUCCESS,
+                        "GPS 模拟已成功：系统定位接口读取到 %.6f, %.6f".format(java.util.Locale.US, lat, lng))
+                } catch (e: Exception) {
+                    fail("更新定位服务通知失败", e)
+                }
             }
         }
         @Deprecated("Deprecated in Java")
@@ -54,6 +58,9 @@ class MockLocationService : Service() {
                     "模拟位置应用授权已撤销"
                 }
                 MockLocationEngine.setMockLocation(lm, lat, lng)
+                check(MockLocationEngine.isMockAppSelected(this@MockLocationService)) {
+                    "模拟位置应用授权已撤销"
+                }
                 handler.postDelayed(this, 1000)
             } catch (e: Exception) {
                 fail("更新测试位置失败", e)
