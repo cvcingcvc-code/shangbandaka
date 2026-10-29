@@ -13,6 +13,7 @@ import android.os.SystemClock
 /** Android's supported test-provider APIs. Exceptions are propagated for the UI and logs. */
 object MockLocationEngine {
     const val PROVIDER_NAME = LocationManager.GPS_PROVIDER
+    const val NETWORK_PROVIDER = LocationManager.NETWORK_PROVIDER
 
     fun isMockAppSelected(context: Context): Boolean {
         val ops = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
@@ -28,22 +29,22 @@ object MockLocationEngine {
     // The legacy overload supports API 26; these Criteria constants have the same
     // integer values as the ProviderProperties constants introduced in API 31.
     @SuppressLint("WrongConstant")
-    fun addTestProvider(lm: LocationManager) {
+    fun addTestProvider(lm: LocationManager, provider: String = PROVIDER_NAME) {
         @Suppress("DEPRECATION")
         lm.addTestProvider(
-            PROVIDER_NAME, false, false, false, false, true, true, true,
+            provider, false, false, false, false, true, true, true,
             Criteria.POWER_LOW, Criteria.ACCURACY_FINE
         )
         try {
-            lm.setTestProviderEnabled(PROVIDER_NAME, true)
+            lm.setTestProviderEnabled(provider, true)
         } catch (e: Exception) {
-            try { lm.removeTestProvider(PROVIDER_NAME) } catch (cleanup: Exception) { e.addSuppressed(cleanup) }
+            try { lm.removeTestProvider(provider) } catch (cleanup: Exception) { e.addSuppressed(cleanup) }
             throw e
         }
     }
 
-    fun setMockLocation(lm: LocationManager, lat: Double, lng: Double, accuracy: Float = 5f) {
-        val location = Location(PROVIDER_NAME).apply {
+    fun setMockLocation(lm: LocationManager, lat: Double, lng: Double, accuracy: Float = 5f, provider: String = PROVIDER_NAME) {
+        val location = Location(provider).apply {
             latitude = lat
             longitude = lng
             altitude = 50.0
@@ -54,10 +55,10 @@ object MockLocationEngine {
             elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
         }
         // Android marks locations delivered by a test provider as mock.
-        lm.setTestProviderLocation(PROVIDER_NAME, location)
+        lm.setTestProviderLocation(provider, location)
     }
 
-    fun removeTestProvider(lm: LocationManager) {
-        lm.removeTestProvider(PROVIDER_NAME)
+    fun removeTestProvider(lm: LocationManager, provider: String = PROVIDER_NAME) {
+        lm.removeTestProvider(provider)
     }
 }

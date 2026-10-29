@@ -24,23 +24,28 @@ import androidx.core.content.ContextCompat
 class MockLocationService : Service() {
     private lateinit var lm: LocationManager
     private val handler = Handler(Looper.getMainLooper())
-    private var registered = false
     private var running = false
     private var foreground = false
     private var lat = 0.0
     private var lng = 0.0
     private var listening = false
+    private val verified = mutableSetOf<String>()
     private val reader = object : LocationListener {
         override fun onLocationChanged(location: Location) {
+            val provider = location.provider ?: return
             val mock = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) location.isMock
                 else @Suppress("DEPRECATION") location.isFromMockProvider
             if (running && mock && kotlin.math.abs(location.latitude - lat) < 0.000001 &&
                 kotlin.math.abs(location.longitude - lng) < 0.000001 &&
-                MockLocationStatus.current.phase == MockLocationStatus.Phase.REGISTERING) {
+                MockLocationStatus.current.phase == MockLocationStatus.Phase.REGISTERING &&
+                provider in PROVIDERS) {
                 try {
+                    verified.add(provider)
+                    Log.i(TAG, "已验证 $provider 模拟坐标")
+                    if (!verified.containsAll(PROVIDERS)) return
                     updateNotification("已注入 %.6f, %.6f".format(java.util.Locale.US, lat, lng))
                     MockLocationStatus.update(MockLocationStatus.Phase.SUCCESS,
-                        "GPS 模拟已成功：系统定位接口读取到 %.6f, %.6f".format(java.util.Locale.US, lat, lng))
+                        "GPS 和网络模拟已成功：系统定位接口读取到 %.6f, %.6f".format(java.util.Locale.US, lat, lng))
                 } catch (e: Exception) {
                     fail("更新定位服务通知失败", e)
                 }
@@ -57,7 +62,7 @@ class MockLocationService : Service() {
                 check(MockLocationEngine.isMockAppSelected(this@MockLocationService)) {
                     "模拟位置应用授权已撤销"
                 }
-                MockLocationEngine.setMockLocation(lm, lat, lng)
+                injectAll()
                 check(MockLocationEngine.isMockAppSelected(this@MockLocationService)) {
                     "模拟位置应用授权已撤销"
                 }
@@ -94,26 +99,24 @@ class MockLocationService : Service() {
             foreground = true
             running = false
             handler.removeCallbacksAndMessages(null)
-            if (registered) {
-                MockLocationEngine.removeTestProvider(lm)
-                registered = false
-            }
             MockLocationStatus.update(MockLocationStatus.Phase.REGISTERING, "正在注册测试位置")
-            // Persist before registration: Android can kill this process without onDestroy().
-            check(setCleanupPending(this, true)) { "无法保存测试位置清理状态" }
-            MockLocationEngine.addTestProvider(lm)
-            registered = true
-            // App-op may change between the preflight and the injection.
-            check(MockLocationEngine.isMockAppSelected(this)) { "模拟位置应用授权已撤销" }
+            verified.clear()
+            for (provider in PROVIDERS) {
+                // Persist before registration: Android can kill this process without onDestroy().
+                check(setCleanupPending(this, provider, true)) { "无法保存 $provider 测试位置清理状态" }
+                try { MockLocationEngine.addTestProvider(lm, provider) }
+                catch (e: Exception) { throw IllegalStateException("$provider 注册失败：${e.message}", e) }
+                check(MockLocationEngine.isMockAppSelected(this)) { "模拟位置应用授权已撤销" }
+            }
             if (listening) lm.removeUpdates(reader)
-            lm.requestLocationUpdates(MockLocationEngine.PROVIDER_NAME, 0L, 0f, reader, Looper.getMainLooper())
             listening = true
+            for (provider in PROVIDERS) lm.requestLocationUpdates(provider, 0L, 0f, reader, Looper.getMainLooper())
             running = true
-            MockLocationEngine.setMockLocation(lm, lat, lng)
+            injectAll()
             handler.postDelayed(tick, 1000)
             handler.postDelayed({
                 if (running && MockLocationStatus.current.phase == MockLocationStatus.Phase.REGISTERING) {
-                    fail("验证测试位置失败", IllegalStateException("系统定位接口未在限时内返回所选模拟坐标"))
+                    fail("验证测试位置失败", IllegalStateException("未在限时内验证 ${PROVIDERS - verified} 的所选模拟坐标"))
                 }
             }, 10000)
         } catch (e: Exception) {
@@ -136,24 +139,19 @@ class MockLocationService : Service() {
         stopSelf()
     }
 
+    private fun injectAll() {
+        for (provider in PROVIDERS) {
+            try { MockLocationEngine.setMockLocation(lm, lat, lng, provider = provider) }
+            catch (e: Exception) { throw IllegalStateException("$provider 注入失败：${e.message}", e) }
+        }
+    }
+
     private fun cleanupProvider(): String? {
         if (listening) {
             try { lm.removeUpdates(reader) } catch (e: Exception) { Log.w(TAG, "Failed to remove location listener", e) }
             listening = false
         }
-        if (!registered) return if (isCleanupPending(this)) CLEANUP_REQUIRED else null
-        return try {
-            if (!MockLocationEngine.isMockAppSelected(this)) return CLEANUP_REQUIRED
-            MockLocationEngine.removeTestProvider(lm)
-            // Some Android implementations silently ignore an operation after AppOps changes.
-            if (!MockLocationEngine.isMockAppSelected(this)) return CLEANUP_REQUIRED
-            if (!setCleanupPending(this, false)) return "无法保存清理状态；请重新选择本应用并重试停止"
-            registered = false
-            null
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to remove test provider", e)
-            "${e.javaClass.simpleName}: ${e.message ?: "无详细信息"}"
-        }
+        return cleanupPendingProviders(this, lm)
     }
 
     override fun onDestroy() {
@@ -214,19 +212,51 @@ class MockLocationService : Service() {
         private const val NOTIF_ID = 1001
         private const val PREFS = "mock_location_state"
         private const val KEY_CLEANUP_PENDING = "cleanup_pending"
-        private const val CLEANUP_REQUIRED = "无法确认测试位置是否释放；请重新选择本应用为模拟位置应用后点击停止，重试移除当前 GPS 测试位置"
+        private const val KEY_NETWORK_CLEANUP_PENDING = "network_cleanup_pending"
+        private val PROVIDERS = listOf(MockLocationEngine.PROVIDER_NAME, MockLocationEngine.NETWORK_PROVIDER)
+        private const val CLEANUP_REQUIRED = "无法确认测试位置是否释放；请重新选择本应用为模拟位置应用后点击停止，重试移除当前 GPS 和网络测试位置"
         const val EXTRA_LAT = "extra_lat"
         const val EXTRA_LNG = "extra_lng"
         private var stopRequested = false
         private var requestId = 0L
 
         private fun isCleanupPending(ctx: Context): Boolean =
-            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_CLEANUP_PENDING, false)
+            PROVIDERS.any { isCleanupPending(ctx, it) }
+
+        private fun cleanupKey(provider: String): String = when (provider) {
+            MockLocationEngine.PROVIDER_NAME -> KEY_CLEANUP_PENDING // compatible with earlier GPS-only versions
+            MockLocationEngine.NETWORK_PROVIDER -> KEY_NETWORK_CLEANUP_PENDING
+            else -> error("未知测试位置 provider：$provider")
+        }
+
+        private fun isCleanupPending(ctx: Context, provider: String): Boolean =
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(cleanupKey(provider), false)
 
         fun hasPendingCleanup(ctx: Context): Boolean = isCleanupPending(ctx)
 
-        private fun setCleanupPending(ctx: Context, pending: Boolean): Boolean =
-            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_CLEANUP_PENDING, pending).commit()
+        private fun setCleanupPending(ctx: Context, provider: String, pending: Boolean): Boolean =
+            ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(cleanupKey(provider), pending).commit()
+
+        private fun cleanupPendingProviders(ctx: Context, lm: LocationManager): String? {
+            val errors = mutableListOf<String>()
+            for (provider in PROVIDERS) {
+                if (!isCleanupPending(ctx, provider)) continue
+                try {
+                    if (!MockLocationEngine.isMockAppSelected(ctx)) {
+                        errors.add("$provider：$CLEANUP_REQUIRED")
+                        continue
+                    }
+                    MockLocationEngine.removeTestProvider(lm, provider)
+                    if (!MockLocationEngine.isMockAppSelected(ctx) || !setCleanupPending(ctx, provider, false)) {
+                        errors.add("$provider：$CLEANUP_REQUIRED")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to remove test provider $provider", e)
+                    errors.add("$provider：${e.javaClass.simpleName}: ${e.message ?: "无详细信息"}")
+                }
+            }
+            return errors.takeIf { it.isNotEmpty() }?.joinToString("；")
+        }
 
         /** A persisted marker is not proof of a running service. Never restart from it. */
         fun reportPendingCleanup(ctx: Context) {
@@ -279,12 +309,12 @@ class MockLocationService : Service() {
                         // Explicit user retry: the GPS test provider is system-wide and its owner
                         // cannot be verified via the public API.
                         val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-                        MockLocationEngine.removeTestProvider(lm)
-                        if (!MockLocationEngine.isMockAppSelected(ctx) || !setCleanupPending(ctx, false)) {
-                            MockLocationStatus.update(MockLocationStatus.Phase.FAILED, CLEANUP_REQUIRED)
+                        val error = cleanupPendingProviders(ctx, lm)
+                        if (error != null) {
+                            MockLocationStatus.update(MockLocationStatus.Phase.FAILED, "清理测试位置失败：$error")
                         } else {
                             MockLocationStatus.update(MockLocationStatus.Phase.STOPPED,
-                                "已请求移除当前 GPS 测试位置；请验证系统定位是否恢复")
+                                "已请求移除当前 GPS 和网络测试位置；请验证系统定位是否恢复")
                         }
                     }
                 }

@@ -97,6 +97,14 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
             val started = awaitStatus(setOf(MockLocationStatus.Phase.SUCCESS, MockLocationStatus.Phase.FAILED))
             assertEquals(started.message, MockLocationStatus.Phase.SUCCESS, started.phase)
             assertTrue(started.message, started.message.contains("%.6f".format(java.util.Locale.US, lat)))
+            val manager = ctx.getSystemService(LocationManager::class.java)
+            for (provider in listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)) {
+                val location = manager.getLastKnownLocation(provider)
+                assertNotNull("$provider has no last known location", location)
+                assertTrue("$provider must report a mock", location!!.isFromMockProvider)
+                assertEquals("$provider latitude", lat, location.latitude, 0.000001)
+                assertEquals("$provider longitude", 139.767125, location.longitude, 0.000001)
+            }
             instrumentation.runOnMainSync { MockLocationService.stop(ctx) }
             val stopped = awaitStatus(setOf(MockLocationStatus.Phase.STOPPED, MockLocationStatus.Phase.FAILED))
             assertEquals(stopped.message, MockLocationStatus.Phase.STOPPED, stopped.phase)

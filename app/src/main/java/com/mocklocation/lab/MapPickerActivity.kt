@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.content.Context
 import android.text.TextUtils
 import android.view.View
@@ -39,6 +40,16 @@ class MapPickerActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MapPickerSearch"
+        private var lastSearchAt = 0L
+
+        // This is a per-process guard, not a substitute for the public service's
+        // application-wide usage limits across multiple installations.
+        @Synchronized private fun reserveSearch(): Boolean {
+            val now = SystemClock.elapsedRealtime()
+            if (lastSearchAt != 0L && now - lastSearchAt < 1100L) return false
+            lastSearchAt = now
+            return true
+        }
     }
 
     private var webView: WebView? = null
@@ -59,7 +70,6 @@ class MapPickerActivity : AppCompatActivity() {
     private var selName = ""
     private var selDetail = ""
 
-    private var lastSearchAt = 0L
     private var searchGeneration = 0
     private var mapSelectionId = 0
     private var lastResults: List<NomaPoi> = emptyList()
@@ -299,18 +309,16 @@ class MapPickerActivity : AppCompatActivity() {
 
     /** 搜索请求（用户点按钮触发，无自动补全；1 req/s 节流） */
     private fun doSearch() {
-        val now = System.currentTimeMillis()
-        if (now - lastSearchAt < 1100) {
-            Toast.makeText(this, "Nominatim 限每秒 1 次请求，请稍候再搜", Toast.LENGTH_SHORT).show()
-            return
-        }
         val kw = etSearch.text.toString().trim()
         if (kw.isEmpty()) {
             Toast.makeText(this, "请输入关键词", Toast.LENGTH_SHORT).show()
             return
         }
+        if (!reserveSearch()) {
+            Toast.makeText(this, "请求过快，请稍候再搜", Toast.LENGTH_SHORT).show()
+            return
+        }
         hideKeyboard()
-        lastSearchAt = now
         val generation = ++searchGeneration
         lastResults = emptyList()
         selLat = Double.NaN
