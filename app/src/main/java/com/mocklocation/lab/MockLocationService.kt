@@ -215,6 +215,7 @@ class MockLocationService : Service() {
         private const val KEY_NETWORK_CLEANUP_PENDING = "network_cleanup_pending"
         private val PROVIDERS = listOf(MockLocationEngine.PROVIDER_NAME, MockLocationEngine.NETWORK_PROVIDER)
         private const val CLEANUP_REQUIRED = "无法确认测试位置是否释放；请重新选择本应用为模拟位置应用后点击停止，重试移除当前 GPS 和网络测试位置"
+        private const val CLEANUP_READY = "存在待清理的测试位置记录；请点击停止模拟，清理 GPS 和网络测试位置后再开始"
         const val EXTRA_LAT = "extra_lat"
         const val EXTRA_LNG = "extra_lng"
         private var stopRequested = false
@@ -233,6 +234,13 @@ class MockLocationService : Service() {
             ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(cleanupKey(provider), false)
 
         fun hasPendingCleanup(ctx: Context): Boolean = isCleanupPending(ctx)
+
+        private fun pendingCleanupMessage(ctx: Context): String = try {
+            if (MockLocationEngine.isMockAppSelected(ctx)) CLEANUP_READY else CLEANUP_REQUIRED
+        } catch (e: Exception) {
+            Log.e(TAG, "Unable to check mock-location authorization", e)
+            "无法检查模拟位置授权：${e.javaClass.simpleName}: ${e.message ?: "无详细信息"}；请检查授权并点击停止模拟"
+        }
 
         private fun setCleanupPending(ctx: Context, provider: String, pending: Boolean): Boolean =
             ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(cleanupKey(provider), pending).commit()
@@ -261,14 +269,14 @@ class MockLocationService : Service() {
         /** A persisted marker is not proof of a running service. Never restart from it. */
         fun reportPendingCleanup(ctx: Context) {
             if (isCleanupPending(ctx) && MockLocationStatus.current.phase == MockLocationStatus.Phase.IDLE) {
-                MockLocationStatus.update(MockLocationStatus.Phase.FAILED, CLEANUP_REQUIRED)
+                MockLocationStatus.update(MockLocationStatus.Phase.FAILED, pendingCleanupMessage(ctx))
             }
         }
 
         fun start(ctx: Context, lat: Double, lng: Double) {
             check(Looper.myLooper() == Looper.getMainLooper())
             if (isCleanupPending(ctx)) {
-                MockLocationStatus.update(MockLocationStatus.Phase.FAILED, CLEANUP_REQUIRED)
+                MockLocationStatus.update(MockLocationStatus.Phase.FAILED, pendingCleanupMessage(ctx))
                 return
             }
             val id = ++requestId

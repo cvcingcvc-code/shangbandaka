@@ -123,7 +123,14 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
         assertTrue("A stop without authorization must not claim cleanup",
             MockLocationService.hasPendingCleanup(ctx))
         assertTrue(blocked.message, blocked.message.contains("无法确认"))
+        instrumentation.runOnMainSync { MockLocationService.start(ctx, 35.681236, 139.767125) }
+        assertTrue(MockLocationStatus.current.message, MockLocationStatus.current.message.contains("重新选择"))
+        assertTrue(MockLocationService.hasPendingCleanup(ctx))
         shell("appops set com.mocklocation.lab android:mock_location allow")
+        instrumentation.runOnMainSync { MockLocationService.start(ctx, 35.681236, 139.767125) }
+        assertEquals(MockLocationStatus.Phase.FAILED, MockLocationStatus.current.phase)
+        assertTrue(MockLocationStatus.current.message, MockLocationStatus.current.message.contains("点击停止模拟"))
+        assertTrue(MockLocationService.hasPendingCleanup(ctx))
         instrumentation.runOnMainSync { MockLocationService.stop(ctx) }
         val recovered = awaitStatus(setOf(MockLocationStatus.Phase.STOPPED), 10000)
         assertFalse("Cleanup should be requested again after authorization is restored",
