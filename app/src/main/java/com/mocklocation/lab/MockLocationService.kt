@@ -24,6 +24,7 @@ class MockLocationService : Service() {
     private var listening = false
     private var foreground = false
     private var finishing = false
+    private var stopByUser = false
     private var terminal: MockLocationStatus.Status? = null
     private var lastWallMillis = 0L
     private var lastElapsedNanos = 0L
@@ -96,7 +97,7 @@ class MockLocationService : Service() {
             val recovery = cleanupPendingProviders(this, lm)
             check(recovery == null) { "清理上次测试位置失败：$recovery" }
             verifier = MockSessionVerifier(PROVIDERS.toSet(), SystemClock.elapsedRealtimeNanos(), lat, lng)
-            Log.i(TAG, "session=$sessionId targetWgs84=$lat,$lng wall=${System.currentTimeMillis()} elapsed=${SystemClock.elapsedRealtimeNanos()}")
+            Log.i(TAG, "session=$sessionId start wall=${System.currentTimeMillis()} elapsed=${SystemClock.elapsedRealtimeNanos()}")
             MockLocationStatus.update(MockLocationStatus.Phase.VERIFYING, "验证中：注册并检查 GPS、网络定位")
             for (provider in PROVIDERS) {
                 // A crash between recording and registering leaves an uncertainty marker.
@@ -167,6 +168,7 @@ class MockLocationService : Service() {
         return errors.takeIf { it.isNotEmpty() }?.joinToString("；")
     }
     private fun finishWithFailure(stage: String, cause: Exception) {
+        stopByUser = false
         Log.e(TAG, "session=$sessionId $stage elapsed=${SystemClock.elapsedRealtimeNanos()}", cause)
         val error = release()
         finish(MockLocationStatus.Status(
@@ -176,6 +178,7 @@ class MockLocationService : Service() {
     }
     private fun finishStopped() {
         if (finishing) return
+        stopByUser = true
         MockLocationStatus.update(MockLocationStatus.Phase.STOPPING, "停止中：停止注入并解除测试位置")
         finish(stoppedResult(release()))
     }
@@ -206,10 +209,7 @@ class MockLocationService : Service() {
     }
     override fun onDestroy() {
         val error = release()
-        val result = if (error != null) MockLocationStatus.Status(MockLocationStatus.Phase.CLEANUP_FAILED,
-            listOfNotNull(terminal?.message, "退出时清理失败：$error").joinToString("；")) else terminal
-            ?: MockLocationStatus.Status(MockLocationStatus.Phase.FAILED,
-                "服务意外退出，已请求解除测试位置；等待独立端验证正常定位")
+        val result = CleanupStatusResolver.resolve(terminal, error, stopByUser)
         if (active === this) {
             active = null
             // A newer start may be queued after stop cancelled an undelivered Intent.
@@ -318,7 +318,7 @@ class MockLocationService : Service() {
             if (active?.finishing == true) {
                 if (MockLocationStatus.current.phase in setOf(MockLocationStatus.Phase.FAILED,
                         MockLocationStatus.Phase.CLEANUP_FAILED)) {
-                    active?.let { it.finish(stoppedResult(it.release())) }
+                    active?.let { it.stopByUser = true; it.finish(stoppedResult(it.release())) }
                 }
                 return
             }

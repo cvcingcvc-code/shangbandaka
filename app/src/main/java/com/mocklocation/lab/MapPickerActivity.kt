@@ -2,6 +2,7 @@ package com.mocklocation.lab
 
 import android.app.Activity
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -16,6 +17,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.webkit.WebSettings
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -155,26 +157,61 @@ class MapPickerActivity : AppCompatActivity() {
             mapContainer.addView(map, FrameLayout.LayoutParams(-1, -1))
             map.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView?, url: String?) {
+                    if (!MapNavigationPolicy.isLocalMap(url)) return
                     val lat = if (selLat.isFinite()) selLat else intent.getDoubleExtra("init_lat", 39.908722)
                     val lng = if (selLng.isFinite()) selLng else intent.getDoubleExtra("init_lng", 116.397499)
                     if (!selLat.isFinite()) tvMapStatus.text = "点击地图选择位置；地图需要网络连接"
                     val selectionId = if (selLat.isFinite()) mapSelectionId else 0
                     view?.evaluateJavascript("window.setCenter && setCenter($lat, $lng, $selectionId)", null)
                 }
-                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean = false
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean =
+                    handleMapNavigation(request?.url?.toString(), request?.isForMainFrame == true,
+                        request?.hasGesture() == true)
+
+                @Deprecated("Deprecated in Java")
+                override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean =
+                    handleMapNavigation(url, isMainFrame = true, hasGesture = false)
             }
             map.settings.javaScriptEnabled = true
-            map.settings.domStorageEnabled = true
-            map.settings.cacheMode = android.webkit.WebSettings.LOAD_DEFAULT
+            // android_asset remains available when arbitrary filesystem access is disabled.
+            map.settings.allowFileAccess = false
+            map.settings.allowContentAccess = false
+            @Suppress("DEPRECATION")
+            map.settings.allowFileAccessFromFileURLs = false
+            @Suppress("DEPRECATION")
+            map.settings.allowUniversalAccessFromFileURLs = false
+            map.settings.domStorageEnabled = false
+            map.settings.javaScriptCanOpenWindowsAutomatically = false
+            map.settings.setSupportMultipleWindows(false)
+            map.settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+            map.settings.cacheMode = WebSettings.LOAD_DEFAULT
+            map.settings.userAgentString += " MockLocationLab (+https://github.com/cvcingcvc-code/shangbandaka)"
             map.addJavascriptInterface(JsBridge(), "AndroidBridge")
             map.webChromeClient = WebChromeClient()
-            map.loadUrl("file:///android_asset/map.html")
+            map.loadUrl(MapNavigationPolicy.MAP_URL)
         } catch (e: Exception) {
             android.util.Log.e(TAG, "地图初始化失败", e)
             mapContainer.removeAllViews()
             webView?.destroy()
             webView = null
             showMapUnavailable(mapSelectionId)
+        }
+    }
+
+    /** External attribution pages open without this app's JavaScript bridge. */
+    private fun handleMapNavigation(url: String?, isMainFrame: Boolean, hasGesture: Boolean): Boolean {
+        return when (MapNavigationPolicy.decide(url, isMainFrame, hasGesture)) {
+            MapNavigationPolicy.Decision.LOCAL_MAP -> false
+            MapNavigationPolicy.Decision.EXTERNAL_BROWSER -> {
+                try {
+                    startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(requireNotNull(url))).addCategory(Intent.CATEGORY_BROWSABLE))
+                } catch (e: Exception) {
+                    android.util.Log.w(TAG, "Open attribution page failed: ${e.javaClass.simpleName}")
+                    Toast.makeText(this, "无法打开浏览器", Toast.LENGTH_SHORT).show()
+                }
+                true
+            }
+            MapNavigationPolicy.Decision.BLOCK -> true
         }
     }
 
@@ -329,9 +366,8 @@ class MapPickerActivity : AppCompatActivity() {
         resultContainer.removeAllViews()
         resultContainer.addView(TextView(this).apply { text = "搜索中…" })
         resultsLabel.text = "全球搜索中…"
-        android.util.Log.i(TAG, "doSearch kw='$kw' scope=global")
+        android.util.Log.i(TAG, "Search started generation=$generation")
         Thread {
-            var finalUrl = ""
             try {
                 val enc = URLEncoder.encode(kw, "UTF-8")
                 val sb = StringBuilder()
@@ -339,8 +375,7 @@ class MapPickerActivity : AppCompatActivity() {
                     .append("?q=").append(enc)
                     .append("&format=json&limit=8&accept-language=zh-CN")
                     .append("&addressdetails=1") // 结构化城市/国家
-                finalUrl = sb.toString()
-                android.util.Log.i(TAG, "request GET $finalUrl")
+                val finalUrl = sb.toString()
                 val conn = URL(finalUrl).openConnection() as HttpURLConnection
                 conn.connectTimeout = 8000
                 conn.readTimeout = 8000
@@ -348,7 +383,7 @@ class MapPickerActivity : AppCompatActivity() {
                 conn.setRequestProperty("User-Agent", "MockLocationLab (https://github.com/cvcingcvc-code/shangbandaka)")
                 val code = conn.responseCode
                 val body = if (code == 200) readStream(conn) else ""
-                android.util.Log.i(TAG, "response http=$code bodyLen=${body.length} head=${body.take(150)}")
+                android.util.Log.i(TAG, "Search response generation=$generation http=$code")
                 conn.disconnect()
                 if (code != 200) {
                     runUiToast("搜索失败 HTTP $code（仍可地图点选/手输坐标）", generation)
@@ -372,10 +407,11 @@ class MapPickerActivity : AppCompatActivity() {
                     out.add(NomaPoi(name, city, country, lat, lng, o.optString("display_name", "")))
                 }
                 runOnUiThread { if (!isDestroyed && !isFinishing && generation == searchGeneration) renderResults(out) }
-                android.util.Log.i(TAG, "parsed count=${out.size} first=${out.firstOrNull()?.let { "${it.name}|${it.city}|${it.country}|${it.lat},${it.lng}" } ?: "none"}")
+                android.util.Log.i(TAG, "Search parsed generation=$generation count=${out.size}")
             } catch (e: Exception) {
-                android.util.Log.w(TAG, "search exception url=$finalUrl", e)
-                runUiToast("搜索错误: ${e.javaClass.simpleName}: ${e.message}（仍可地图点选/手输坐标）", generation)
+                // Exception messages/stack traces can contain the complete query URL.
+                android.util.Log.w(TAG, "Search failed generation=$generation type=${e.javaClass.simpleName}")
+                runUiToast("搜索错误: ${e.javaClass.simpleName}（仍可地图点选/手输坐标）", generation)
             }
         }.start()
     }

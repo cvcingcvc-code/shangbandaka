@@ -2,7 +2,7 @@
 
 Android 开发测试工具，使用系统测试位置 provider；不隐藏模拟位置标记，也不绕过第三方检测。
 
-当前候选版本：`v1.1.2-rc.8`（versionCode 11）。**实体手机验收尚未完成：BLOCKED: PHYSICAL_DEVICE_NOT_TESTED。** 模拟器结果不能证明真机、地图当前位置、微信发送位置界面或指定小程序兼容。
+当前候选版本：`v1.1.2-rc.9`（versionCode 12）。**实体手机验收尚未完成：BLOCKED: PHYSICAL_DEVICE_NOT_TESTED。** 模拟器结果不能证明真机、地图当前位置、微信发送位置界面或指定小程序兼容。
 
 ## 使用
 
@@ -21,3 +21,5 @@ Android 开发测试工具，使用系统测试位置 provider；不隐藏模拟
 参见 [BUILD_GUIDE.md](BUILD_GUIDE.md) 和 [INSTALL_GUIDE.md](INSTALL_GUIDE.md)。系统定位、独立应用和获授权微信小程序分别记录，不互相替代。小程序是否接受模拟坐标取决于其自身实现，本项目不绕过检测。
 
 冻结需求见 [FIXED_LOCATION_REQUIREMENTS.md](docs/FIXED_LOCATION_REQUIREMENTS.md)；十轮真机验收见 [PHYSICAL_DEVICE_ACCEPTANCE.md](docs/PHYSICAL_DEVICE_ACCEPTANCE.md)。独立读取工具源码位于 `diagnostics/location-reader`。
+
+rc.9 的 [静态审计与候选交付记录](docs/AUDIT_RC9.md) 区分网络用途、代码修复与尚未执行的设备检查；源码审计不能替代动态抓包或正常使用验收。
