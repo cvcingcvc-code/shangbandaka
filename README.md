@@ -23,3 +23,5 @@ Android 开发测试工具，使用系统测试位置 provider；不隐藏模拟
 冻结需求见 [FIXED_LOCATION_REQUIREMENTS.md](docs/FIXED_LOCATION_REQUIREMENTS.md)；十轮真机验收见 [PHYSICAL_DEVICE_ACCEPTANCE.md](docs/PHYSICAL_DEVICE_ACCEPTANCE.md)。独立读取工具源码位于 `diagnostics/location-reader`。
 
 rc.9 的 [静态审计与候选交付记录](docs/AUDIT_RC9.md) 区分网络用途、代码修复与尚未执行的设备检查；源码审计不能替代动态抓包或正常使用验收。
+
+下载：[rc.9 真机测评 Pre-release](https://github.com/cvcingcvc-code/shangbandaka/releases/tag/v1.1.2-rc.9)。按用户要求先提供测评下载，模拟器及真机验收仍为 BLOCKED，不能据此宣称正常可用。

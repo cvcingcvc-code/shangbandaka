@@ -35,6 +35,8 @@ GitHub Actions 已启用，修复分支有工作流，但 workflow/run/checks �
 
 SHA-256：`83B97F85A91E82D20B916A106D9E797DC1084DDA7B684A821435D8C41893D9E4`。
 
-证书 SHA-256：`461211f988cfaf6a3cf6d267e3f151474f719abd169155c856d5d1a0b38704b6`，与旧版相同。旧版和 rc.8 候选保留；此包尚未安装到手机，也未发布新 GitHub Release。
+证书 SHA-256：`461211f988cfaf6a3cf6d267e3f151474f719abd169155c856d5d1a0b38704b6`，与旧版相同。旧版和 rc.8 候选保留；此包尚未安装到手机。
+
+发布后补充：按用户最新要求，已先上传 [rc.9 真机测评 Pre-release](https://github.com/cvcingcvc-code/shangbandaka/releases/tag/v1.1.2-rc.9) 供下载。模拟器回归及真机验收仍未完成，发布页明确保留 BLOCKED 状态，未晋级稳定版。该发布不改变上述审计与验收结论。
 
 今天的真机测评使用 [固定需求](FIXED_LOCATION_REQUIREMENTS.md) 和 [十轮验收表](PHYSICAL_DEVICE_ACCEPTANCE.md)。先取得独立 GPS/network/系统 fused 的新回调，再核对地图当前位置、微信新打开的发送位置界面、指定授权小程序及停止后的新非模拟位置；必要时再决定接口修复。历史实际错误的 FAIL 不因本轮构建通过而消失。
