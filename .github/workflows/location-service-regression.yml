@@ -1,6 +1,8 @@
 name: Location service emulator regression
 
 on:
+  pull_request:
+    branches: [main]
   push:
     branches: [fix/real-device-location-v1.1.2]
     paths:
