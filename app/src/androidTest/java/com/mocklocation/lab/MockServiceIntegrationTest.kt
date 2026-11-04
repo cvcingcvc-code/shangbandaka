@@ -128,13 +128,15 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
         assertTrue(MockLocationService.hasPendingCleanup(ctx))
         shell("appops set com.mocklocation.lab android:mock_location allow")
         instrumentation.runOnMainSync { MockLocationService.start(ctx, 35.681236, 139.767125) }
-        assertEquals(MockLocationStatus.Phase.FAILED, MockLocationStatus.current.phase)
-        assertTrue(MockLocationStatus.current.message, MockLocationStatus.current.message.contains("点击停止模拟"))
-        assertTrue(MockLocationService.hasPendingCleanup(ctx))
-        instrumentation.runOnMainSync { MockLocationService.stop(ctx) }
-        val recovered = awaitStatus(setOf(MockLocationStatus.Phase.STOPPED), 10000)
-        assertFalse("Cleanup should be requested again after authorization is restored",
-            MockLocationService.hasPendingCleanup(ctx))
-        assertTrue(recovered.message, recovered.message.contains("请验证"))
+        val recovered = awaitStatus(setOf(MockLocationStatus.Phase.SUCCESS, MockLocationStatus.Phase.FAILED))
+        assertEquals("Start should clean the stale providers after authorization is restored: ${recovered.message}",
+            MockLocationStatus.Phase.SUCCESS, recovered.phase)
+        instrumentation.runOnMainSync {
+            MockLocationService.stop(ctx)
+            MockLocationService.stop(ctx) // duplicate stop must not interfere with onDestroy
+        }
+        val stopped = awaitStatus(setOf(MockLocationStatus.Phase.STOPPED, MockLocationStatus.Phase.FAILED))
+        assertEquals(stopped.message, MockLocationStatus.Phase.STOPPED, stopped.phase)
+        assertFalse("Stopping should clear the cleanup markers", MockLocationService.hasPendingCleanup(ctx))
     }
 }

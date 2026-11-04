@@ -75,6 +75,7 @@ class MockLocationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        serviceActive = true
         lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
         createChannel()
     }
@@ -171,6 +172,8 @@ class MockLocationService : Service() {
             MockLocationStatus.update(MockLocationStatus.Phase.FAILED, "定位服务已退出")
         }
         stopRequested = false
+        stopInProgress = false
+        serviceActive = false
         if (foreground) stopForeground(STOP_FOREGROUND_REMOVE)
         super.onDestroy()
     }
@@ -215,10 +218,12 @@ class MockLocationService : Service() {
         private const val KEY_NETWORK_CLEANUP_PENDING = "network_cleanup_pending"
         private val PROVIDERS = listOf(MockLocationEngine.PROVIDER_NAME, MockLocationEngine.NETWORK_PROVIDER)
         private const val CLEANUP_REQUIRED = "无法确认测试位置是否释放；请重新选择本应用为模拟位置应用后点击停止，重试移除当前 GPS 和网络测试位置"
-        private const val CLEANUP_READY = "存在待清理的测试位置记录；请点击停止模拟，清理 GPS 和网络测试位置后再开始"
+        private const val CLEANUP_READY = "存在待清理的测试位置记录；点击停止可重试清理，或点击开始先清理再启动"
         const val EXTRA_LAT = "extra_lat"
         const val EXTRA_LNG = "extra_lng"
         private var stopRequested = false
+        private var stopInProgress = false
+        private var serviceActive = false
         private var requestId = 0L
 
         private fun isCleanupPending(ctx: Context): Boolean =
@@ -275,9 +280,31 @@ class MockLocationService : Service() {
 
         fun start(ctx: Context, lat: Double, lng: Double) {
             check(Looper.myLooper() == Looper.getMainLooper())
-            if (isCleanupPending(ctx)) {
-                MockLocationStatus.update(MockLocationStatus.Phase.FAILED, pendingCleanupMessage(ctx))
+            if (stopInProgress || serviceActive || MockLocationStatus.current.phase == MockLocationStatus.Phase.PREPARING) {
+                Log.w(TAG, "Start ignored while service is active or changing state")
                 return
+            }
+            if (isCleanupPending(ctx)) {
+                // A previous process may have died after recording a pending provider.
+                // An explicit new start already replaces these providers, so first request
+                // their removal. Never discard a marker when removal or authorization fails.
+                try {
+                    if (!MockLocationEngine.isMockAppSelected(ctx)) {
+                        MockLocationStatus.update(MockLocationStatus.Phase.FAILED, pendingCleanupMessage(ctx))
+                        return
+                    }
+                    val lm = ctx.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+                    val error = cleanupPendingProviders(ctx, lm)
+                    if (error != null) {
+                        MockLocationStatus.update(MockLocationStatus.Phase.FAILED, "清理上次测试位置失败：$error")
+                        return
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Cannot recover pending test providers", e)
+                    MockLocationStatus.update(MockLocationStatus.Phase.FAILED,
+                        "清理上次测试位置失败：${e.javaClass.simpleName}: ${e.message ?: "无详细信息"}")
+                    return
+                }
             }
             val id = ++requestId
             stopRequested = false
@@ -303,12 +330,15 @@ class MockLocationService : Service() {
 
         fun stop(ctx: Context) {
             check(Looper.myLooper() == Looper.getMainLooper())
+            if (stopInProgress) return
             ++requestId
             stopRequested = true
+            stopInProgress = true
             MockLocationStatus.update(MockLocationStatus.Phase.PREPARING, "正在停止并清理测试位置")
             try {
                 if (!ctx.stopService(Intent(ctx, MockLocationService::class.java))) {
                     stopRequested = false
+                    stopInProgress = false
                     if (!isCleanupPending(ctx)) {
                         MockLocationStatus.update(MockLocationStatus.Phase.STOPPED, "没有待清理记录；请验证系统定位状态")
                     } else if (!MockLocationEngine.isMockAppSelected(ctx)) {
@@ -325,9 +355,21 @@ class MockLocationService : Service() {
                                 "已请求移除当前 GPS 和网络测试位置；请验证系统定位是否恢复")
                         }
                     }
+                } else {
+                    val stopId = requestId
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        if (stopInProgress && requestId == stopId) {
+                            stopInProgress = false
+                            stopRequested = false
+                            Log.e(TAG, "Timed out waiting for service destruction")
+                            MockLocationStatus.update(MockLocationStatus.Phase.FAILED,
+                                "停止超时，无法确认测试位置已清理；请重试停止")
+                        }
+                    }, 15000)
                 }
             } catch (e: Exception) {
                 stopRequested = false
+                stopInProgress = false
                 Log.e(TAG, "Cannot stop service", e)
                 MockLocationStatus.update(MockLocationStatus.Phase.FAILED,
                     "停止服务失败：${e.javaClass.simpleName}: ${e.message ?: "无详细信息"}")
