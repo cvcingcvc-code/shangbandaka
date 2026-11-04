@@ -23,8 +23,8 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
-        versionCode = 10
-        versionName = "1.1.2-rc.7"
+        versionCode = 11
+        versionName = "1.1.2-rc.8"
     }
 
     buildTypes {
@@ -53,4 +53,5 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
+    testImplementation("junit:junit:4.13.2")
 }

@@ -43,7 +43,9 @@ object MockLocationEngine {
         }
     }
 
-    fun setMockLocation(lm: LocationManager, lat: Double, lng: Double, accuracy: Float = 5f, provider: String = PROVIDER_NAME) {
+    fun setMockLocation(lm: LocationManager, lat: Double, lng: Double, accuracy: Float = 5f,
+                        provider: String = PROVIDER_NAME, timeMillis: Long = System.currentTimeMillis(),
+                        elapsedNanos: Long = SystemClock.elapsedRealtimeNanos()) {
         val location = Location(provider).apply {
             latitude = lat
             longitude = lng
@@ -51,8 +53,8 @@ object MockLocationEngine {
             this.accuracy = accuracy
             bearing = 0f
             speed = 0f
-            time = System.currentTimeMillis()
-            elapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+            time = timeMillis
+            elapsedRealtimeNanos = elapsedNanos
         }
         // Android marks locations delivered by a test provider as mock.
         lm.setTestProviderLocation(provider, location)

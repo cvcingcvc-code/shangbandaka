@@ -6,7 +6,13 @@ import android.util.Log
 
 /** In-process snapshot: it is never persisted as proof that the service survived a process death. */
 object MockLocationStatus {
-    enum class Phase { IDLE, PREPARING, REGISTERING, SUCCESS, FAILED, STOPPED }
+    enum class Phase {
+        IDLE, PREPARING, VERIFYING, RUNNING, STOPPING, CLEANUP_FAILED, FAILED,
+        // Provider removal completed; normal location still needs independent verification.
+        STOPPED_WAITING,
+        // Reserved for a stop whose normal-location recovery has actually been verified.
+        STOPPED
+    }
     data class Status(val phase: Phase, val message: String)
 
     @Volatile var current = Status(Phase.IDLE, "尚未开始")

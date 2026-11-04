@@ -39,16 +39,19 @@ class MainActivity : AppCompatActivity() {
     private var targetLng = 116.397499
     private var selectionText = "尚未确认地点；也可手动输入坐标"
 
+    private fun isSessionBusy() = MockLocationStatus.current.phase in setOf(
+        MockLocationStatus.Phase.PREPARING, MockLocationStatus.Phase.VERIFYING,
+        MockLocationStatus.Phase.RUNNING, MockLocationStatus.Phase.STOPPING
+    )
+
     private val statusListener: (MockLocationStatus.Status) -> Unit = { status ->
-        val busy = when (status.phase) {
-            MockLocationStatus.Phase.PREPARING, MockLocationStatus.Phase.REGISTERING,
-            MockLocationStatus.Phase.SUCCESS -> true
-            else -> false
-        }
-        tvStatus.text = "状态：${status.message}"
+        val busy = isSessionBusy()
+        tvStatus.text = if (status.phase == MockLocationStatus.Phase.STOPPED_WAITING) {
+            "状态：模拟已解除，等待正常定位\n${status.message}"
+        } else "状态：${status.message}"
         btnStart.isEnabled = !busy
         // 停止也用于授权恢复后的显式清理；失败状态不能禁用重试。
-        btnStop.isEnabled = true
+        btnStop.isEnabled = status.phase != MockLocationStatus.Phase.STOPPING
         btnSearch.isEnabled = !busy
         btnMap.isEnabled = !busy
         etSearch.isEnabled = !busy
@@ -155,7 +158,7 @@ class MainActivity : AppCompatActivity() {
         coords.addView(etLng, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(coords)
         tvStatus = TextView(this).apply {
-            text = "状态：已停止"
+            text = "状态：尚未开始"
             textSize = 16f
             setPadding(0, pad / 2, 0, pad / 2)
         }
@@ -172,6 +175,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun openMapPicker(query: String? = null) {
+        if (isSessionBusy()) return
         val i = Intent(this, MapPickerActivity::class.java)
             .putExtra("init_lat", targetLat).putExtra("init_lng", targetLng)
         if (!query.isNullOrBlank()) i.putExtra("search_query", query)
@@ -179,6 +183,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun searchPlace() {
+        if (isSessionBusy()) return
         val query = etSearch.text.toString().trim()
         if (query.isEmpty()) {
             Toast.makeText(this, "请输入地点", Toast.LENGTH_SHORT).show()
@@ -193,6 +198,7 @@ class MainActivity : AppCompatActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode != 2001 || resultCode != Activity.RESULT_OK || data == null) return
+        if (isSessionBusy()) return
         val lat = data.getDoubleExtra("lat", Double.NaN)
         val lng = data.getDoubleExtra("lng", Double.NaN)
         if (!lat.isFinite() || !lng.isFinite()) return
@@ -205,6 +211,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startMock() {
+        if (isSessionBusy()) return
         if (!hasLocationPermission()) {
             tvStatus.text = "状态：需要精确定位权限"
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.ACCESS_FINE_LOCATION,
