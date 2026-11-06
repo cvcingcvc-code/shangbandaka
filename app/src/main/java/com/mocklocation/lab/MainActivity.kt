@@ -46,10 +46,16 @@ class MainActivity : AppCompatActivity() {
 
     private val statusListener: (MockLocationStatus.Status) -> Unit = { status ->
         val busy = isSessionBusy()
-        tvStatus.text = if (status.phase == MockLocationStatus.Phase.STOPPED_WAITING) {
+        val mockSelected = runCatching { MockLocationEngine.isMockAppSelected(this) }.getOrNull()
+        val stateText = if (status.phase == MockLocationStatus.Phase.STOPPED_WAITING) {
             "状态：模拟已解除，等待正常定位\n${status.message}"
         } else "状态：${status.message}"
-        btnStart.isEnabled = !busy
+        tvStatus.text = when {
+            mockSelected == false -> "$stateText\n尚未获得模拟位置授权：请在开发者选项中选择 Mock Location Lab。"
+            mockSelected == null -> "$stateText\n无法检查模拟位置授权，请重新打开应用检查。"
+            else -> stateText
+        }
+        btnStart.isEnabled = !busy && mockSelected == true && hasValidCoordinateInput()
         // 停止也用于授权恢复后的显式清理；失败状态不能禁用重试。
         btnStop.isEnabled = status.phase != MockLocationStatus.Phase.STOPPING
         btnSearch.isEnabled = !busy
@@ -62,7 +68,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         lm = getSystemService(Context.LOCATION_SERVICE) as LocationManager
-        if (savedInstanceState != null) {
+        val restoreSelection = savedInstanceState?.getInt("selection_schema", 0) == 1
+        if (savedInstanceState != null && restoreSelection) {
             targetLat = savedInstanceState.getDouble("targetLat", targetLat)
             targetLng = savedInstanceState.getDouble("targetLng", targetLng)
             selectionText = savedInstanceState.getString("selectionText", selectionText)
@@ -70,10 +77,12 @@ class MainActivity : AppCompatActivity() {
         buildUi()
         if (savedInstanceState != null) {
             etSearch.setText(savedInstanceState.getString("query", ""))
-            etLat.setText(savedInstanceState.getString("lat", ""))
-            etLng.setText(savedInstanceState.getString("lng", ""))
-            selectionText = savedInstanceState.getString("selectionText", selectionText)
-            tvSelection.text = selectionText
+            if (restoreSelection) {
+                etLat.setText(savedInstanceState.getString("lat", ""))
+                etLng.setText(savedInstanceState.getString("lng", ""))
+                selectionText = savedInstanceState.getString("selectionText", selectionText)
+                tvSelection.text = selectionText
+            }
         }
     }
 
@@ -90,6 +99,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt("selection_schema", 1)
         outState.putDouble("targetLat", targetLat)
         outState.putDouble("targetLng", targetLng)
         outState.putString("selectionText", selectionText)
@@ -150,10 +160,27 @@ class MainActivity : AppCompatActivity() {
                 selectionText = "已输入坐标，请检查后开始模拟"
                 tvSelection.text = selectionText
             }
-            override fun afterTextChanged(s: Editable?) {}
+            override fun afterTextChanged(s: Editable?) { refreshStartAvailability() }
         }
         etLat.addTextChangedListener(coordinateWatcher)
         etLng.addTextChangedListener(coordinateWatcher)
+        var previousQuery = PlaceSearchPolicy.normalize(etSearch.text.toString())
+        etSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) {
+                val query = PlaceSearchPolicy.normalize(s?.toString().orEmpty())
+                if (query == previousQuery) return
+                previousQuery = query
+                if (isSessionBusy()) return
+                // A new search must not accidentally start the previous confirmed target.
+                etLat.text.clear()
+                etLng.text.clear()
+                selectionText = "搜索文字已更改，请重新搜索并确认地点，或输入坐标"
+                tvSelection.text = selectionText
+                refreshStartAvailability()
+            }
+        })
         coords.addView(etLat, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         coords.addView(etLng, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         root.addView(coords)
@@ -240,6 +267,18 @@ class MainActivity : AppCompatActivity() {
 
     private fun hasLocationPermission() = ContextCompat.checkSelfPermission(this,
         Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasValidCoordinateInput(): Boolean {
+        val lat = etLat.text.toString().toDoubleOrNull() ?: return false
+        val lng = etLng.text.toString().toDoubleOrNull() ?: return false
+        return lat.isFinite() && lat in -90.0..90.0 && lng.isFinite() && lng in -180.0..180.0
+    }
+
+    private fun refreshStartAvailability() {
+        if (!::btnStart.isInitialized) return
+        btnStart.isEnabled = !isSessionBusy() && hasValidCoordinateInput() &&
+            runCatching { MockLocationEngine.isMockAppSelected(this) }.getOrDefault(false)
+    }
 
     private fun openMockAppSettings() {
         Toast.makeText(this, "请进入开发者选项，选择 Mock Location Lab 作为模拟位置信息应用。", Toast.LENGTH_LONG).show()

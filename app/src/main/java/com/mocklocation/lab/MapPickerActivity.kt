@@ -6,9 +6,10 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import android.content.Context
 import android.text.TextUtils
+import android.text.Editable
+import android.text.TextWatcher
 import android.view.View
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
@@ -27,31 +28,14 @@ import java.util.Locale
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
 
 /**
- * 全球搜索后由用户选择具体结果，再在地图确认；无自动补全或自动选点。
- * Nominatim 请求仅由搜索操作触发，并在本页面按每秒一次节流。
+ * 系统地点搜索后明确选择并在地图确认；联网备用搜索由用户单独触发。
  */
 class MapPickerActivity : AppCompatActivity() {
 
     companion object {
         private const val TAG = "MapPickerSearch"
-        private var lastSearchAt = 0L
-
-        // This is a per-process guard, not a substitute for the public service's
-        // application-wide usage limits across multiple installations.
-        @Synchronized private fun reserveSearch(): Boolean {
-            val now = SystemClock.elapsedRealtime()
-            if (lastSearchAt != 0L && now - lastSearchAt < 1100L) return false
-            lastSearchAt = now
-            return true
-        }
     }
 
     private var webView: WebView? = null
@@ -72,16 +56,19 @@ class MapPickerActivity : AppCompatActivity() {
     private var selName = ""
     private var selDetail = ""
 
-    private var searchGeneration = 0
+    private val queryGate = PlaceSearchQueryGate()
     private var mapSelectionId = 0
-    private var lastResults: List<NomaPoi> = emptyList()
+    private var lastResults: List<PlaceCandidate> = emptyList()
+    private lateinit var searchRepository: PlaceSearchRepository
+    private var activeSearch: PlaceSearchRepository.Request? = null
 
     /** JS 桥：地图点击回传（WGS-84） */
     inner class JsBridge {
         @JavascriptInterface
-        fun onMapClick(lat: Double, lng: Double) {
+        fun onMapClick(lat: Double, lng: Double, contextId: Int) {
             runOnUiThread {
-                if (!isDestroyed && !isFinishing) pick(lat, lng, "地图点选", "", fromMap = true)
+                if (!isDestroyed && !isFinishing && mapPanel.visibility == View.VISIBLE &&
+                    contextId == mapSelectionId) pick(lat, lng, "地图点选", "", fromMap = true)
             }
         }
 
@@ -109,6 +96,7 @@ class MapPickerActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        searchRepository = PlaceSearchRepository(this)
         buildUi()
         if (savedInstanceState != null) {
             // Do not restore a map confirmation across recreation. Restore the list so
@@ -116,10 +104,12 @@ class MapPickerActivity : AppCompatActivity() {
             etSearch.setText(savedInstanceState.getString("query", ""))
             @Suppress("DEPRECATION")
             val saved = savedInstanceState.getParcelableArrayList<Bundle>("results")
-            if (saved != null) renderResults(saved.map {
-                NomaPoi(it.getString("name", ""), it.getString("city", ""), it.getString("country", ""),
-                    it.getDouble("lat"), it.getDouble("lng"), it.getString("display", ""))
-            })
+            if (saved != null) renderResults(saved.map { item ->
+                PlaceCandidate(item.getString("name", ""), item.getString("city", ""), item.getString("country", ""),
+                    item.getDouble("lat"), item.getDouble("lng"), item.getString("display", ""),
+                    PlaceSearchSource.values().firstOrNull { it.name == item.getString("source") } ?: PlaceSearchSource.NOMINATIM,
+                    item.getString("region", ""), item.getString("countryCode", ""), item.getBoolean("administrative"))
+            }.filter { PlaceSearchPolicy.accepts(etSearch.text.toString(), it) })
             else resultsLabel.text = "请点击搜索，再选择具体地点"
             return
         }
@@ -142,6 +132,8 @@ class MapPickerActivity : AppCompatActivity() {
             outState.putParcelableArrayList("results", ArrayList(lastResults.map { p -> Bundle().apply {
                 putString("name", p.name); putString("city", p.city); putString("country", p.country)
                 putDouble("lat", p.lat); putDouble("lng", p.lng); putString("display", p.displayName)
+                putString("source", p.source.name); putString("region", p.region)
+                putString("countryCode", p.countryCode); putBoolean("administrative", p.administrativeOnly)
             } }))
         }
         super.onSaveInstanceState(outState)
@@ -162,7 +154,7 @@ class MapPickerActivity : AppCompatActivity() {
                     val lng = if (selLng.isFinite()) selLng else intent.getDoubleExtra("init_lng", 116.397499)
                     if (!selLat.isFinite()) tvMapStatus.text = "点击地图选择位置；地图需要网络连接"
                     val selectionId = if (selLat.isFinite()) mapSelectionId else 0
-                    view?.evaluateJavascript("window.setCenter && setCenter($lat, $lng, $selectionId)", null)
+                    view?.evaluateJavascript("window.setCenter && setCenter($lat, $lng, $selectionId); window.setInteractionContext && setInteractionContext($mapSelectionId)", null)
                 }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean =
                     handleMapNavigation(request?.url?.toString(), request?.isForMainFrame == true,
@@ -238,7 +230,7 @@ class MapPickerActivity : AppCompatActivity() {
         searchRow.addView(btnSearch)
         searchPanel.addView(searchRow)
         resultsLabel = TextView(this).apply {
-            text = "全球搜索：点击具体地点，再在地图上确认"
+            text = "搜索准确名称或地址，选择匹配结果后在地图确认"
             setPadding(0, pad / 2, 0, pad / 2)
         }
         searchPanel.addView(resultsLabel)
@@ -308,6 +300,26 @@ class MapPickerActivity : AppCompatActivity() {
 
         btnSearch.setOnClickListener { doSearch() }
         btnConfirm.setOnClickListener { confirmAndReturn() }
+        // Editing invalidates both an outstanding request and already rendered results.
+        // Install only after all views exist, including when restoring query text.
+        etSearch.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {
+                cancelSearch()
+                lastResults = emptyList()
+                resultContainer.removeAllViews()
+                ++mapSelectionId
+                selLat = Double.NaN
+                selLng = Double.NaN
+                selName = ""
+                selDetail = ""
+                btnConfirm.isEnabled = false
+                tvSelected.text = "尚未选点：请搜索并确认新地点"
+                resultsLabel.text = "输入已更改，请点击搜索；旧结果已失效"
+                webView?.evaluateJavascript("window.clearSelection && clearSelection()", null)
+            }
+            override fun afterTextChanged(s: Editable?) {}
+        })
     }
 
     private fun hideKeyboard() {
@@ -317,12 +329,13 @@ class MapPickerActivity : AppCompatActivity() {
     }
 
     private fun showMapPanel() {
+        cancelSearch()
         searchPanel.visibility = View.GONE
         mapPanel.visibility = View.VISIBLE
         // A WebView that was GONE may have a stale Leaflet viewport size.
         mapPanel.post {
             if (!isDestroyed && !isFinishing && mapPanel.visibility == View.VISIBLE) {
-                webView?.evaluateJavascript("window.refreshMap && refreshMap()", null)
+                webView?.evaluateJavascript("window.setInteractionContext && setInteractionContext($mapSelectionId); window.refreshMap && refreshMap()", null)
             }
         }
     }
@@ -336,6 +349,12 @@ class MapPickerActivity : AppCompatActivity() {
         webView?.evaluateJavascript("window.clearSelection && clearSelection()", null)
         mapPanel.visibility = View.GONE
         searchPanel.visibility = View.VISIBLE
+        // Entering the map cancels response tickets. Rebind the unchanged, previously
+        // completed result list so Back does not leave visible but inert list items.
+        if (lastResults.isNotEmpty()) {
+            renderResults(lastResults)
+            if (lastResults.first().source == PlaceSearchSource.SYSTEM) addOnlineFallback()
+        }
     }
 
     @Deprecated("Deprecated in Java")
@@ -344,19 +363,18 @@ class MapPickerActivity : AppCompatActivity() {
         else super.onBackPressed()
     }
 
-    /** 搜索请求（用户点按钮触发，无自动补全；1 req/s 节流） */
-    private fun doSearch() {
-        val kw = etSearch.text.toString().trim()
-        if (kw.isEmpty()) {
+    /** No autocomplete: every provider request follows an explicit user action. */
+    private fun doSearch() = beginSearch(online = false)
+
+    private fun beginSearch(online: Boolean) {
+        val keyword = etSearch.text.toString().trim()
+        if (keyword.isEmpty()) {
             Toast.makeText(this, "请输入关键词", Toast.LENGTH_SHORT).show()
             return
         }
-        if (!reserveSearch()) {
-            Toast.makeText(this, "请求过快，请稍候再搜", Toast.LENGTH_SHORT).show()
-            return
-        }
+        cancelSearch()
         hideKeyboard()
-        val generation = ++searchGeneration
+        val ticket = queryGate.capture(keyword)
         lastResults = emptyList()
         selLat = Double.NaN
         selLng = Double.NaN
@@ -364,74 +382,65 @@ class MapPickerActivity : AppCompatActivity() {
         btnConfirm.isEnabled = false
         tvSelected.text = "尚未选点：点击地图选择位置"
         resultContainer.removeAllViews()
-        resultContainer.addView(TextView(this).apply { text = "搜索中…" })
-        resultsLabel.text = "全球搜索中…"
-        android.util.Log.i(TAG, "Search started generation=$generation")
-        Thread {
-            try {
-                val enc = URLEncoder.encode(kw, "UTF-8")
-                val sb = StringBuilder()
-                sb.append("https://nominatim.openstreetmap.org/search")
-                    .append("?q=").append(enc)
-                    .append("&format=json&limit=8&accept-language=zh-CN")
-                    .append("&addressdetails=1") // 结构化城市/国家
-                val finalUrl = sb.toString()
-                val conn = URL(finalUrl).openConnection() as HttpURLConnection
-                conn.connectTimeout = 8000
-                conn.readTimeout = 8000
-                conn.requestMethod = "GET"
-                conn.setRequestProperty("User-Agent", "MockLocationLab (https://github.com/cvcingcvc-code/shangbandaka)")
-                val code = conn.responseCode
-                val body = if (code == 200) readStream(conn) else ""
-                android.util.Log.i(TAG, "Search response generation=$generation http=$code")
-                conn.disconnect()
-                if (code != 200) {
-                    runUiToast("搜索失败 HTTP $code（仍可地图点选/手输坐标）", generation)
-                    return@Thread
-                }
-                val arr = org.json.JSONArray(body)
-                val out = ArrayList<NomaPoi>()
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    val lat = o.optDouble("lat", Double.NaN)
-                    val lng = o.optDouble("lon", Double.NaN)
-                    if (!lat.isFinite() || !lng.isFinite() || lat !in -90.0..90.0 || lng !in -180.0..180.0) continue
-                    val name = o.optString("name", "").ifBlank {
-                        o.optString("display_name", "").substringBefore(',')
-                    }
-                    // addressdetails: city/state/country
-                    val addr = o.optJSONObject("address") ?: JSONObject()
-                    val city = listOf("city", "town", "village", "municipality", "county", "state")
-                        .map { addr.optString(it, "") }.firstOrNull { it.isNotBlank() } ?: "城市未标注"
-                    val country = addr.optString("country", "").ifBlank { "国家未标注" }
-                    out.add(NomaPoi(name, city, country, lat, lng, o.optString("display_name", "")))
-                }
-                runOnUiThread { if (!isDestroyed && !isFinishing && generation == searchGeneration) renderResults(out) }
-                android.util.Log.i(TAG, "Search parsed generation=$generation count=${out.size}")
-            } catch (e: Exception) {
-                // Exception messages/stack traces can contain the complete query URL.
-                android.util.Log.w(TAG, "Search failed generation=$generation type=${e.javaClass.simpleName}")
-                runUiToast("搜索错误: ${e.javaClass.simpleName}（仍可地图点选/手输坐标）", generation)
+        val source = if (online) PlaceSearchSource.NOMINATIM else PlaceSearchSource.SYSTEM
+        resultsLabel.text = "${source.label}搜索中…"
+        resultContainer.addView(TextView(this).apply { text = "正在查询，最多等待 9 秒；不会自动选择结果" })
+        val receive: (PlaceSearchOutcome) -> Unit = { result ->
+            if (!isDestroyed && !isFinishing && queryGate.accepts(ticket, etSearch.text.toString()) &&
+                searchPanel.visibility == View.VISIBLE) {
+                activeSearch = null
+                renderOutcome(result, ticket)
+                android.util.Log.i(TAG, "Search complete revision=${ticket.revision} source=${result.source} state=${result.state} accepted=${result.places.size} received=${result.received}")
             }
-        }.start()
+        }
+        activeSearch = if (online) searchRepository.searchOnline(keyword, receive)
+            else searchRepository.searchSystem(keyword, receive)
     }
 
-    private fun runUiToast(msg: String, generation: Int) {
-        runOnUiThread {
-            if (!isDestroyed && !isFinishing && generation == searchGeneration) {
-                // P0-6：错误必须写进结果区（UI dump 可捕获），不能只靠 Toast
-                resultContainer.removeAllViews()
-                resultsLabel.text = "搜索未完成，请重试或手动选点"
-                resultContainer.addView(TextView(this).apply {
-                    text = "⚠️ $msg"
-                    setPadding(0, 8, 0, 8)
-                })
-                if (searchPanel.visibility == View.VISIBLE) Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+    private fun cancelSearch() {
+        queryGate.invalidate()
+        activeSearch?.cancel()
+        activeSearch = null
+    }
+
+    private fun renderOutcome(result: PlaceSearchOutcome, ticket: PlaceSearchQueryGate.Ticket) {
+        if (result.state == PlaceSearchState.RESULTS) {
+            renderResults(result.places, ticket)
+            resultsLabel.text = "${result.source.label}：${result.places.size} 个匹配地点，请明确选择" +
+                if (result.cached) "（本机缓存）" else ""
+        } else {
+            lastResults = emptyList()
+            resultContainer.removeAllViews()
+            val reason = when (result.state) {
+                PlaceSearchState.EMPTY -> if (result.received > 0)
+                    "返回的地点均不符合输入的城市或具体关键词，已过滤；不会用其他城市或城市中心代替"
+                    else "没有找到匹配地点；可尝试准确全名、所在区或门牌地址"
+                PlaceSearchState.UNAVAILABLE -> "手机没有可用的系统地点服务"
+                PlaceSearchState.TIMEOUT -> "地点服务超时；迟到结果不会覆盖当前选择"
+                PlaceSearchState.NETWORK_ERROR -> "地点服务网络请求失败${result.detail.takeIf { it.isNotBlank() }?.let { "（$it）" } ?: ""}"
+                PlaceSearchState.BUSY -> "地点服务忙，请稍后重试"
+                else -> "地点服务错误${result.detail.takeIf { it.isNotBlank() }?.let { "（$it）" } ?: ""}"
             }
+            resultsLabel.text = "${result.source.label}：搜索未完成选点"
+            resultContainer.addView(TextView(this).apply {
+                text = reason
+                setPadding(0, 8, 0, 8)
+            })
+        }
+        if (result.source == PlaceSearchSource.SYSTEM) {
+            addOnlineFallback()
         }
     }
 
-    private fun renderResults(list: List<NomaPoi>) {
+    private fun addOnlineFallback() {
+        resultContainer.addView(Button(this).apply {
+            text = "备用：联网搜索当前文字"
+            setOnClickListener { beginSearch(online = true) }
+        })
+    }
+
+    private fun renderResults(list: List<PlaceCandidate>,
+                              ticket: PlaceSearchQueryGate.Ticket = queryGate.capture(etSearch.text.toString())) {
         lastResults = list
         resultContainer.removeAllViews()
         resultsLabel.text = if (list.isEmpty()) "没有找到地点，请换个关键词"
@@ -439,7 +448,8 @@ class MapPickerActivity : AppCompatActivity() {
         for (p in list.take(8)) {
             val tv = TextView(this).apply {
                 // 必须显示：地点名称 + 城市 + 国家
-                text = "📍 ${p.name}\n${p.city}, ${p.country}\n${p.displayName}\n" + String.format(Locale.US, "%.5f, %.5f", p.lat, p.lng)
+                text = "📍 ${p.name}\n${p.city}, ${p.country}\n${p.displayName}\n来源：${p.source.label}\n" +
+                    String.format(Locale.US, "%.5f, %.5f", p.lat, p.lng)
                 val inset = (8 * resources.displayMetrics.density).toInt()
                 setPadding(inset, inset, inset, inset)
                 minHeight = (48 * resources.displayMetrics.density).toInt()
@@ -448,7 +458,12 @@ class MapPickerActivity : AppCompatActivity() {
                 val attrs = obtainStyledAttributes(intArrayOf(android.R.attr.selectableItemBackground))
                 background = attrs.getDrawable(0)
                 attrs.recycle()
-                setOnClickListener { pick(p.lat, p.lng, p.name, "${p.city}, ${p.country}") }
+                setOnClickListener {
+                    if (!queryGate.accepts(ticket, etSearch.text.toString()) ||
+                        searchPanel.visibility != View.VISIBLE) return@setOnClickListener
+                    pick(p.lat, p.lng, p.name, "${p.displayName}\n来源：${p.source.label}",
+                        coordinateNote = if (p.source == PlaceSearchSource.SYSTEM) "系统地址坐标，请核对地图" else "WGS-84")
+                }
             }
             resultContainer.addView(tv)
             resultContainer.addView(View(this).apply {
@@ -458,7 +473,8 @@ class MapPickerActivity : AppCompatActivity() {
     }
 
     /** 明确选择：用户点击某条结果/地图某点后才置为已选，绝不自动选 */
-    private fun pick(lat: Double, lng: Double, name: String, detail: String, fromMap: Boolean = false) {
+    private fun pick(lat: Double, lng: Double, name: String, detail: String, fromMap: Boolean = false,
+                     coordinateNote: String = "WGS-84") {
         if (!lat.isFinite() || !lng.isFinite() || lat !in -90.0..90.0 || lng !in -180.0..180.0) return
         hideKeyboard()
         showMapPanel()
@@ -466,7 +482,7 @@ class MapPickerActivity : AppCompatActivity() {
         selLng = lng
         selName = name
         selDetail = detail
-        tvSelected.text = "已选: $name\n$detail\n" + String.format(Locale.US, "%.6f, %.6f（WGS-84）", lat, lng)
+        tvSelected.text = "已选: $name\n$detail\n" + String.format(Locale.US, "%.6f, %.6f（%s）", lat, lng, coordinateNote)
         btnConfirm.isEnabled = false
         btnRetryMap.visibility = View.GONE
         tvMapStatus.text = "正在加载所选位置的地图，请稍候…"
@@ -510,23 +526,9 @@ class MapPickerActivity : AppCompatActivity() {
         finish()
     }
 
-    private fun readStream(conn: HttpURLConnection): String {
-        val reader = BufferedReader(InputStreamReader(conn.inputStream, "UTF-8"))
-        val sb = StringBuilder()
-        var line: String? = reader.readLine()
-        while (line != null) {
-            sb.append(line)
-            line = reader.readLine()
-        }
-        reader.close()
-        return sb.toString()
-    }
-
     override fun onDestroy() {
+        cancelSearch()
         webView?.destroy()
         super.onDestroy()
     }
-
-    data class NomaPoi(val name: String, val city: String, val country: String,
-                       val lat: Double, val lng: Double, val displayName: String)
 }

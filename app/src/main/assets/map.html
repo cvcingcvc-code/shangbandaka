@@ -27,7 +27,9 @@
 
   var marker = null;
   var selectionId = 0;
+  var interactionContext = 0;
   var selectionTimer = null;
+  window.setInteractionContext = function(id) { interactionContext = id; };
   window.refreshMap = function() { map.invalidateSize({animate: false}); };
   window.clearSelection = function() {
     clearTimeout(selectionTimer);
@@ -66,12 +68,13 @@
     else { marker = L.marker(e.latlng).addTo(map); }
     // 回传给 Android（WGS-84，OSM 原生坐标系）
     if (window.AndroidBridge && AndroidBridge.onMapClick) {
-      AndroidBridge.onMapClick(lat, lng);
+      AndroidBridge.onMapClick(lat, lng, interactionContext);
     }
   });
 
   // 供外部设置中心点（搜索结果/初始坐标）
   window.setCenter = function(lat, lng, id, keepZoom) {
+    interactionContext = id || 0;
     map.invalidateSize({animate: false});
     map.setView([lat, lng], keepZoom ? map.getZoom() : 16);
     if (id) {

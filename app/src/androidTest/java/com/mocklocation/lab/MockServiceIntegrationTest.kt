@@ -11,6 +11,10 @@ import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.test.InstrumentationTestCase
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.EditText
 import java.io.FileInputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -23,6 +27,7 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
     private var hadFine = false
     private var hadCoarse = false
     private var emulatorVerified = false
+    private lateinit var mainActivity: MainActivity
     private val ctx get() = instrumentation.targetContext
     private val stopResults = setOf(MockLocationStatus.Phase.STOPPED_WAITING,
         MockLocationStatus.Phase.CLEANUP_FAILED, MockLocationStatus.Phase.FAILED)
@@ -49,7 +54,7 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
         shell("pm grant com.mocklocation.lab android.permission.ACCESS_FINE_LOCATION")
         shell("pm grant com.mocklocation.lab android.permission.ACCESS_COARSE_LOCATION")
         val activity = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        instrumentation.startActivitySync(activity)
+        mainActivity = instrumentation.startActivitySync(activity) as MainActivity
         instrumentation.waitForIdleSync()
     }
 
@@ -234,4 +239,40 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
         instrumentation.waitForIdleSync()
         assertEquals("A duplicate stop must not revive the session", MockLocationStatus.Phase.STOPPED_WAITING, MockLocationStatus.current.phase)
     }
+
+    fun testRemovingActivityTaskKeepsExplicitForegroundSession() {
+        shell("appops set com.mocklocation.lab android:mock_location allow")
+        instrumentation.runOnMainSync { MockLocationService.start(ctx, 31.230416, 121.473701) }
+        val started = awaitStatus(startResults)
+        assertEquals(started.message, MockLocationStatus.Phase.RUNNING, started.phase)
+        instrumentation.runOnMainSync { mainActivity.finishAndRemoveTask() }
+        Thread.sleep(2200)
+        assertEquals("Removing the UI task must not be treated as Stop",
+            MockLocationStatus.Phase.RUNNING, MockLocationStatus.current.phase)
+        assertFreshTarget(31.230416, 121.473701)
+        instrumentation.runOnMainSync { MockLocationService.stop(ctx) }
+        assertStoppedWaiting()
+    }
+
+    fun testEditingSearchCannotStartPreviousCoordinates() {
+        shell("appops set com.mocklocation.lab android:mock_location allow")
+        instrumentation.runOnMainSync {
+            val all = descendants(mainActivity.window.decorView)
+            val fields = all.filterIsInstance<EditText>()
+            val lat = fields.single { it.hint?.toString() == "纬度" }
+            val lng = fields.single { it.hint?.toString() == "经度" }
+            val query = fields.single { it.hint?.toString() == "输入城市、地标或具体地点" }
+            val start = all.filterIsInstance<Button>().single { it.text.toString() == "开始模拟" }
+            lat.setText("31.230416")
+            lng.setText("121.473701")
+            assertTrue("A manually confirmed valid coordinate can be started", start.isEnabled)
+            query.setText("上海人民广场")
+            assertEquals("A changed query must discard old latitude", "", lat.text.toString())
+            assertEquals("A changed query must discard old longitude", "", lng.text.toString())
+            assertFalse("Search text alone is not a confirmed target", start.isEnabled)
+        }
+    }
+
+    private fun descendants(view: View): List<View> = listOf(view) +
+        if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
 }

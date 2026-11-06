@@ -202,9 +202,9 @@ class MockLocationService : Service() {
         }, 15000)
     }
     override fun onTaskRemoved(rootIntent: Intent?) {
-        ++commandId
-        startPending = false
-        finishStopped()
+        // Removing the Activity task is not the user's explicit Stop command.
+        // Keep the already user-started foreground session; do not restart after a process kill.
+        Log.i(TAG, "Activity task removed; fixed location session remains user-controlled")
         super.onTaskRemoved(rootIntent)
     }
     override fun onDestroy() {
