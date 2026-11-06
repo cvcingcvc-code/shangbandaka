@@ -97,4 +97,14 @@ class PlaceSearchPolicyTest {
         assertFalse(PlaceSearchPolicy.accepts("上海市浦东新区世纪大道100-1号",
             address.copy(street = "临港大道")))
     }
+
+    @Test fun addressDashVariantsDoNotCollapseDifferentHouseNumbers() {
+        val address = place("目的地", "上海市", "上海市", address = "上海市浦东新区世纪大道100-1号")
+        val another = address.copy(name = "100-1号门店", displayName = "上海市浦东新区世纪大道1001号")
+        for (separator in listOf("-", "–", " - ")) {
+            val query = "上海市浦东新区世纪大道100${separator}1号"
+            assertTrue(PlaceSearchPolicy.accepts(query, address))
+            assertFalse(PlaceSearchPolicy.accepts(query, another))
+        }
+    }
 }

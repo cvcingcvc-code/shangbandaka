@@ -23,6 +23,7 @@ internal object PlaceSearchPolicy {
     private val areaSuffixes = listOf("新片区", "片区", "新区", "街道", "开发区", "工业区", "区", "县", "镇", "乡", "市")
     private val numberedStreet = Regex("(路|街|道|巷|弄|胡同)\\s*([0-9]{1,8}(?:-[0-9]{1,8})?)\\s*号$")
     private val houseNumber = Regex("([0-9]{1,8}(?:-[0-9]{1,8})?)\\s*号?")
+    private val numberDash = Regex("(?<=[0-9])\\s*[-‐‑‒–—−]\\s*(?=[0-9])")
 
     fun normalize(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKC)
         .lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
@@ -34,14 +35,14 @@ internal object PlaceSearchPolicy {
     fun accepts(query: String, place: PlaceCandidate): Boolean {
         if (!place.lat.isFinite() || !place.lng.isFinite() || place.lat !in -90.0..90.0 || place.lng !in -180.0..180.0)
             return false
-        val addressQuery = Normalizer.normalize(query.trim(), Normalizer.Form.NFKC)
+        val addressQuery = canonicalNumberDashes(query.trim())
         val numbered = numberedStreet.find(addressQuery)
         if (numbered != null) {
             val (streetSuffix, requestedNumber) = numbered.destructured
             if (place.administrativeOnly) return false
             val beforeNumber = normalize(addressQuery.substring(0, numbered.range.first) + streetSuffix)
             val street = normalize(place.street)
-            val number = houseNumber.matchEntire(Normalizer.normalize(place.houseNumber.trim(), Normalizer.Form.NFKC))
+            val number = houseNumber.matchEntire(canonicalNumberDashes(place.houseNumber.trim()))
                 ?.groupValues?.get(1)
             if (place.street.isNotBlank() && (street.isBlank() || !beforeNumber.endsWith(street))) return false
             if (place.houseNumber.isNotBlank() && number != requestedNumber) return false
@@ -49,12 +50,8 @@ internal object PlaceSearchPolicy {
                 return matchesAddressAreas(beforeNumber.removeSuffix(street), place)
             }
             // Incomplete provider fields can still be supplemented by the full display address.
-            // Preserve house-number boundaries when the legacy matcher discards punctuation.
-            val address = Normalizer.normalize("${place.name} ${place.displayName}", Normalizer.Form.NFKC)
-            val exactNumber = Regex("(?<![0-9-])${Regex.escape(requestedNumber)}\\s*号(?![0-9-])")
-            if (!exactNumber.containsMatchIn(address)) return false
         }
-        val normalized = normalize(query)
+        val normalized = if (numbered == null) normalize(query) else normalizeNumberedAddress(addressQuery)
         if (normalized.isEmpty()) return false
         val city = explicitCity(normalized)
         var term = if (city != null) normalized.removePrefix(city).removePrefix("市") else normalized
@@ -78,7 +75,8 @@ internal object PlaceSearchPolicy {
         if (distinctivePart.length < 2) return false
         // Keep the requested kind in the match. Removing "职业学院" or "新片区"
         // would let a same-stem company or shop masquerade as that institution/area.
-        val actualText = normalize("${place.name} ${place.displayName}")
+        val labelAndAddress = "${place.name} ${place.displayName}"
+        val actualText = if (numbered == null) normalize(labelAndAddress) else normalizeNumberedAddress(labelAndAddress)
         if (!actualText.contains(term)) return false
         val actualName = normalize(place.name)
         val nameWithoutCity = if (city != null) actualName.removePrefix(city).removePrefix("市") else actualName
@@ -90,6 +88,17 @@ internal object PlaceSearchPolicy {
         // A precise POI request must not be fulfilled by a city-centre-only result.
         if (place.administrativeOnly && (institution != null || area == null)) return false
         return true
+    }
+
+    private fun canonicalNumberDashes(value: String): String =
+        numberDash.replace(Normalizer.normalize(value, Normalizer.Form.NFKC), "-")
+
+    private fun normalizeNumberedAddress(value: String): String {
+        val address = canonicalNumberDashes(value).lowercase(Locale.ROOT)
+        return address.filterIndexed { index, char ->
+            char.isLetterOrDigit() || char == '-' &&
+                address.getOrNull(index - 1)?.isDigit() == true && address.getOrNull(index + 1)?.isDigit() == true
+        }
     }
 
     private fun matchesAddressAreas(addressPrefix: String, place: PlaceCandidate): Boolean {

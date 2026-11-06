@@ -280,6 +280,15 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
             assertEquals("A changed query must discard old latitude", "", lat.text.toString())
             assertEquals("A changed query must discard old longitude", "", lng.text.toString())
             assertFalse("Search text alone is not a confirmed target", start.isEnabled)
+
+            query.setText("上海市浦东新区世纪大道100-1号")
+            lat.setText("31.230416")
+            lng.setText("121.473701")
+            assertTrue(start.isEnabled)
+            query.setText("上海市浦东新区世纪大道1001号")
+            assertEquals("", lat.text.toString())
+            assertEquals("", lng.text.toString())
+            assertFalse("A different house number must discard the previous coordinates", start.isEnabled)
         }
     }
 

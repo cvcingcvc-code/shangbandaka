@@ -179,12 +179,12 @@ class MainActivity : AppCompatActivity() {
         }
         etLat.addTextChangedListener(coordinateWatcher)
         etLng.addTextChangedListener(coordinateWatcher)
-        var previousQuery = PlaceSearchPolicy.normalize(etSearch.text.toString())
+        var previousQuery = etSearch.text.toString().trim()
         etSearch.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
             override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
             override fun afterTextChanged(s: Editable?) {
-                val query = PlaceSearchPolicy.normalize(s?.toString().orEmpty())
+                val query = s?.toString().orEmpty().trim()
                 if (query == previousQuery) return
                 previousQuery = query
                 if (isSessionBusy()) return
