@@ -24,13 +24,16 @@ internal object PlaceSearchPolicy {
     fun normalize(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKC)
         .lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
 
+    fun explicitCity(normalizedQuery: String): String? =
+        municipalities.firstOrNull { normalizedQuery.startsWith(it) }
+            ?: Regex("^([\\p{IsHan}]{2,7}?市)").find(normalizedQuery)?.groupValues?.get(1)?.removeSuffix("市")
+
     fun accepts(query: String, place: PlaceCandidate): Boolean {
         if (!place.lat.isFinite() || !place.lng.isFinite() || place.lat !in -90.0..90.0 || place.lng !in -180.0..180.0)
             return false
         val normalized = normalize(query)
         if (normalized.isEmpty()) return false
-        val city = municipalities.firstOrNull { normalized.startsWith(it) }
-            ?: Regex("^([\\p{IsHan}]{2,7}?市)").find(normalized)?.groupValues?.get(1)?.removeSuffix("市")
+        val city = explicitCity(normalized)
         var term = if (city != null) normalized.removePrefix(city).removePrefix("市") else normalized
         if (city != null) {
             // A restaurant named '上海…' in Taiwan is not a Shanghai administrative address.
