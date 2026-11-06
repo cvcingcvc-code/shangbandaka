@@ -8,7 +8,7 @@
 
 本地验证：38项JVM测试、地图桥3项消息检查、主应用lintDebug、设备测试APK编译和内部Release构建均通过；独立读取工具v5的assembleDebug/lintDebug通过。仍有旧API等非阻断编译警告。设备测试没有执行，模拟器未运行，地图/微信/小程序未验收。
 
-rc.10 / code 13 的内部审计包标识见审计记录。公开自测候选以 GitHub 发布页的提交及完整 SHA-256 为准。签名与旧版一致；本次尚无候选安装及外部应用定位证据。
+已发布 [rc.10 自测预发布](https://github.com/cvcingcvc-code/shangbandaka/releases/tag/v1.1.2-rc.10)（versionCode 13），标签指向 `a098a5dd3c1ace4caa7eb02dd8747d5148108ebb`。从 GitHub 重新下载 [主 APK](https://github.com/cvcingcvc-code/shangbandaka/releases/download/v1.1.2-rc.10/MockLocationLab-v1.1.2-rc.10-candidate.apk)，确认 SHA-256 为 `8617F23DC6E98BE659C38ABDBD38AC888EEF99BA79DF4AE586774D2ADEB8E72F`，与发布页及本地构建相同。签名证书与 rc.9 和 v1.1.1-beta.1 一致；旧 Release 保留。运行内容与内部审计包的 402 个条目一致，重新打包仅更新版本控制元数据及签名。本次尚无候选真机安装及外部应用定位证据。
 
 用户确认已装的工具是v4，尚未复查实际包版本或运行Geocoder探针。准确目标文字仍未取得。重连后先核对工具/授权，用显式地名探针验证系统搜索，再做真实输入、选点、开始、独立标准API、地图蓝点、停止后新非mock位置；适用Google FLP、微信和指定小程序分别验收。
 
