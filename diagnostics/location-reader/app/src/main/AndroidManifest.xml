@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <application android:label="Independent location reader" android:allowBackup="false">
+        <activity android:name=".Reader" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <!-- Explicit test-query probe only; not the main application's search UI. -->
+        <activity android:name=".GeocoderProbe" android:exported="true" android:launchMode="singleTask" />
+    </application>
+</manifest>

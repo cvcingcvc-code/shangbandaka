@@ -15,13 +15,16 @@ val keystoreProps = Properties().apply {
 android {
     namespace = "com.mocklocation.lab"
     compileSdk = 35
+    useLibrary("android.test.runner")
+    useLibrary("android.test.base")
 
     defaultConfig {
         applicationId = "com.mocklocation.lab"
         minSdk = 26
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.1.1"
+        testInstrumentationRunner = "android.test.InstrumentationTestRunner"
+        versionCode = 14
+        versionName = "1.1.2-rc.11"
     }
 
     buildTypes {
@@ -50,4 +53,5 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
+    testImplementation("junit:junit:4.13.2")
 }

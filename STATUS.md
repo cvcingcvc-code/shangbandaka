@@ -1,0 +1,17 @@
+# 当前状态
+
+rc.11 增加「百度地图查地址」。用官方 URI 打开已安装的百度地图并带入关键词，用户将完整地址带回应用搜索后，在地图确认坐标。官方短链样例展开后只有地点编号，暂未验证百度手机版能回传可用坐标。设备未连接，rc.11 的手机跳转、地址匹配及定位效果均待验收。
+
+更新时间：2026-11-06。分支 `fix/real-device-location-v1.1.2`。按用户最新要求同步 rc.10 源码与审计，并提供 GitHub 自测候选。真实显示和停止恢复未通过前，不能作为已验收的稳定版。
+
+总体：BLOCKED: PHYSICAL_DEVICE_NOT_TESTED（完整定位验收）。2026-11-04 已连接 REDMI K80 Ultra，核对 rc.9 安装/启动及定位权限，模拟 AppOp 由 deny 经用户操作恢复为 allow。旧搜索实际返回无关地点。2026-11-06 再次检查 ADB，未发现连接设备。
+
+本轮已修复：搜索文字改动后旧响应/旧结果/旧坐标失效、学校与片区类别误匹配、隐藏/迟到地图点击、新目标开始门槛、最近任务移除误当停止、独立Reader旧订阅及年龄判断。新增系统中文Geocoder首选和显式联网备用搜索，未硬编码学校坐标、未新增任何融合定位模拟。
+
+本地验证：38项JVM测试、地图桥3项消息检查、主应用lintDebug、设备测试APK编译和内部Release构建均通过；独立读取工具v5的assembleDebug/lintDebug通过。仍有旧API等非阻断编译警告。设备测试没有执行，模拟器未运行，地图/微信/小程序未验收。
+
+已发布 [rc.10 自测预发布](https://github.com/cvcingcvc-code/shangbandaka/releases/tag/v1.1.2-rc.10)（versionCode 13），标签指向 `a098a5dd3c1ace4caa7eb02dd8747d5148108ebb`。从 GitHub 重新下载 [主 APK](https://github.com/cvcingcvc-code/shangbandaka/releases/download/v1.1.2-rc.10/MockLocationLab-v1.1.2-rc.10-candidate.apk)，确认 SHA-256 为 `8617F23DC6E98BE659C38ABDBD38AC888EEF99BA79DF4AE586774D2ADEB8E72F`，与发布页及本地构建相同。签名证书与 rc.9 和 v1.1.1-beta.1 一致；旧 Release 保留。运行内容与内部审计包的 402 个条目一致，重新打包仅更新版本控制元数据及签名。本次尚无候选真机安装及外部应用定位证据。
+
+用户确认已装的工具是v4，尚未复查实际包版本或运行Geocoder探针。准确目标文字仍未取得。重连后先核对工具/授权，用显式地名探针验证系统搜索，再做真实输入、选点、开始、独立标准API、地图蓝点、停止后新非mock位置；适用Google FLP、微信和指定小程序分别验收。
+
+详细审计与续接步骤：[AUDIT_RC10_INTERNAL.md](docs/AUDIT_RC10_INTERNAL.md)。历史真机现场：[PHYSICAL_SEARCH_SESSION_20261104.md](docs/PHYSICAL_SEARCH_SESSION_20261104.md)。含实际位置的原始日志只保存在本地工作目录，不上传公开仓库。
