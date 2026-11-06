@@ -1,6 +1,8 @@
 package com.mocklocation.lab
 
 import android.Manifest
+import android.app.Activity
+import android.app.Instrumentation
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
@@ -75,7 +77,15 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
                 }
             }
         } finally {
-            super.tearDown()
+            try {
+                if (::mainActivity.isInitialized) {
+                    // startActivitySync needs a fresh Activity, even for the singleTask launcher.
+                    instrumentation.runOnMainSync { mainActivity.finish() }
+                    instrumentation.waitForIdleSync()
+                }
+            } finally {
+                super.tearDown()
+            }
         }
     }
 
@@ -270,6 +280,40 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
             assertEquals("A changed query must discard old latitude", "", lat.text.toString())
             assertEquals("A changed query must discard old longitude", "", lng.text.toString())
             assertFalse("Search text alone is not a confirmed target", start.isEnabled)
+        }
+    }
+
+    fun testBaiduButtonPassesTheKeywordAndExplicitCity() {
+        val launched = AtomicReference<Intent>()
+        val monitor = object : Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? {
+                if (intent.data?.scheme != "baidumap") return null
+                launched.set(Intent(intent))
+                return Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null)
+            }
+        }
+        val keyword = "上海市浦东新区世纪大道100号 & 附近"
+        instrumentation.addMonitor(monitor)
+        try {
+            instrumentation.runOnMainSync {
+                val all = descendants(mainActivity.window.decorView)
+                all.filterIsInstance<EditText>()
+                    .single { it.hint?.toString() == "输入城市、地标或具体地点" }.setText(keyword)
+                all.filterIsInstance<Button>()
+                    .single { it.text.toString() == "百度地图查地址" }.performClick()
+            }
+            val launch = checkNotNull(launched.get()) { "Baidu lookup did not send an Intent" }
+            val uri = checkNotNull(launch.data)
+            assertEquals(Intent.ACTION_VIEW, launch.action)
+            assertEquals("com.baidu.BaiduMap", launch.`package`)
+            assertEquals("map", uri.authority)
+            assertEquals("/place/search", uri.path)
+            assertEquals(keyword, uri.getQueryParameter("query"))
+            assertEquals("上海", uri.getQueryParameter("region"))
+            assertEquals("andr.mocklocation.lab", uri.getQueryParameter("src"))
+            assertEquals(setOf("query", "region", "src"), uri.queryParameterNames)
+        } finally {
+            instrumentation.removeMonitor(monitor)
         }
     }
 

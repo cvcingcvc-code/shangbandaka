@@ -12,7 +12,8 @@ data class PlaceCandidate(
     val name: String, val city: String, val country: String,
     val lat: Double, val lng: Double, val displayName: String,
     val source: PlaceSearchSource,
-    val region: String = "", val countryCode: String = "", val administrativeOnly: Boolean = false
+    val region: String = "", val countryCode: String = "", val administrativeOnly: Boolean = false,
+    val street: String = "", val houseNumber: String = "", val addressAreas: List<String> = emptyList()
 )
 
 /** Reject misleading provider fallbacks rather than pretending a city/other-city POI matched. */
@@ -20,6 +21,8 @@ internal object PlaceSearchPolicy {
     private val municipalities = listOf("上海", "北京", "天津", "重庆")
     private val institutionSuffixes = listOf("职业技术学院", "职业学院", "技术学院", "大学", "学院", "学校", "校区")
     private val areaSuffixes = listOf("新片区", "片区", "新区", "街道", "开发区", "工业区", "区", "县", "镇", "乡", "市")
+    private val numberedStreet = Regex("(路|街|道|巷|弄|胡同)\\s*([0-9]{1,8}(?:-[0-9]{1,8})?)\\s*号$")
+    private val houseNumber = Regex("([0-9]{1,8}(?:-[0-9]{1,8})?)\\s*号?")
 
     fun normalize(value: String): String = Normalizer.normalize(value, Normalizer.Form.NFKC)
         .lowercase(Locale.ROOT).filter { it.isLetterOrDigit() }
@@ -31,6 +34,26 @@ internal object PlaceSearchPolicy {
     fun accepts(query: String, place: PlaceCandidate): Boolean {
         if (!place.lat.isFinite() || !place.lng.isFinite() || place.lat !in -90.0..90.0 || place.lng !in -180.0..180.0)
             return false
+        val addressQuery = Normalizer.normalize(query.trim(), Normalizer.Form.NFKC)
+        val numbered = numberedStreet.find(addressQuery)
+        if (numbered != null) {
+            val (streetSuffix, requestedNumber) = numbered.destructured
+            if (place.administrativeOnly) return false
+            val beforeNumber = normalize(addressQuery.substring(0, numbered.range.first) + streetSuffix)
+            val street = normalize(place.street)
+            val number = houseNumber.matchEntire(Normalizer.normalize(place.houseNumber.trim(), Normalizer.Form.NFKC))
+                ?.groupValues?.get(1)
+            if (place.street.isNotBlank() && (street.isBlank() || !beforeNumber.endsWith(street))) return false
+            if (place.houseNumber.isNotBlank() && number != requestedNumber) return false
+            if (street.isNotEmpty() && number != null) {
+                return matchesAddressAreas(beforeNumber.removeSuffix(street), place)
+            }
+            // Incomplete provider fields can still be supplemented by the full display address.
+            // Preserve house-number boundaries when the legacy matcher discards punctuation.
+            val address = Normalizer.normalize("${place.name} ${place.displayName}", Normalizer.Form.NFKC)
+            val exactNumber = Regex("(?<![0-9-])${Regex.escape(requestedNumber)}\\s*号(?![0-9-])")
+            if (!exactNumber.containsMatchIn(address)) return false
+        }
         val normalized = normalize(query)
         if (normalized.isEmpty()) return false
         val city = explicitCity(normalized)
@@ -66,6 +89,28 @@ internal object PlaceSearchPolicy {
         if (area != null && !place.administrativeOnly && nameWithoutCity != term) return false
         // A precise POI request must not be fulfilled by a city-centre-only result.
         if (place.administrativeOnly && (institution != null || area == null)) return false
+        return true
+    }
+
+    private fun matchesAddressAreas(addressPrefix: String, place: PlaceCandidate): Boolean {
+        if (explicitCity(addressPrefix) != null && place.countryCode.isNotBlank() &&
+            !place.countryCode.equals("CN", ignoreCase = true)) return false
+
+        // Compare the address components rather than relying on the provider's display order.
+        // Every area supplied before the street must be present on the actual result.
+        val areas = (place.addressAreas + place.region.split('，', ',') + place.city + place.country)
+            .map(::normalize).filter { it.isNotEmpty() }.flatMap {
+                when {
+                    it in municipalities -> listOf(it, "${it}市")
+                    it.endsWith("省") || it.endsWith("市") -> listOf(it, it.dropLast(1))
+                    else -> listOf(it)
+                }
+            }.filter { it.isNotEmpty() }.distinct().sortedByDescending { it.length }
+        var prefix = addressPrefix
+        while (prefix.isNotEmpty()) {
+            val area = areas.firstOrNull { prefix.startsWith(it) } ?: return false
+            prefix = prefix.removePrefix(area)
+        }
         return true
     }
 }

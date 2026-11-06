@@ -64,4 +64,37 @@ class PlaceSearchPolicyTest {
         assertTrue(PlaceSearchPolicy.accepts("上海临港新片区",
             place("临港新片区", "浦东新区", "上海市", administrative = false)))
     }
+
+    @Test fun fullAddressMatchesStructuredFieldsInEitherDisplayOrder() {
+        val address = place("上海环球金融中心", "上海市", "上海市",
+            address = "上海环球金融中心, 100, 世纪大道, 陆家嘴街道, 浦东新区, 上海市, 中国").copy(
+            street = "世纪大道", houseNumber = "100", addressAreas = listOf("浦东新区", "陆家嘴街道"))
+        assertTrue(PlaceSearchPolicy.accepts("上海市浦东新区世纪大道100号", address))
+        assertTrue(PlaceSearchPolicy.accepts("上海 浦东新区 世纪大道 １００ 号", address))
+    }
+
+    @Test fun exactAddressRejectsWrongStreetNumberDistrictOrCity() {
+        val address = place("上海环球金融中心", "上海市", "上海市",
+            address = "上海市浦东新区世纪大道100号").copy(
+            street = "世纪大道", houseNumber = "100", addressAreas = listOf("浦东新区"))
+        val query = "上海市浦东新区世纪大道100号"
+        for (wrong in listOf(address.copy(street = "临港大道"), address.copy(houseNumber = "1001"),
+            address.copy(houseNumber = "100-1"), address.copy(houseNumber = "", displayName = "世纪大道"),
+            address.copy(addressAreas = listOf("金山区")), address.copy(city = "苏州市", region = "江苏省，苏州市"),
+            address.copy(countryCode = "TW"),
+            address.copy(administrativeOnly = true))) {
+            assertFalse("Accepted a different address: $wrong", PlaceSearchPolicy.accepts(query, wrong))
+        }
+        assertTrue(PlaceSearchPolicy.accepts("上海市浦东新区世纪大道100-1号", address.copy(houseNumber = "100-1号")))
+    }
+
+    @Test fun formattedAddressWithoutStructuredFieldsKeepsExactNumbers() {
+        val address = place("目的地", "上海市", "上海市", address = "上海市浦东新区世纪大道100-1号")
+        assertTrue(PlaceSearchPolicy.accepts("上海市浦东新区世纪大道100-1号", address))
+        assertFalse(PlaceSearchPolicy.accepts("上海市浦东新区世纪大道1001号", address))
+        assertTrue(PlaceSearchPolicy.accepts("上海市浦东新区世纪大道100-1号",
+            address.copy(street = "世纪大道")))
+        assertFalse(PlaceSearchPolicy.accepts("上海市浦东新区世纪大道100-1号",
+            address.copy(street = "临港大道")))
+    }
 }

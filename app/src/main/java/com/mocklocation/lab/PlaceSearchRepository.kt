@@ -160,9 +160,12 @@ internal class PlaceSearchRepository(context: Context) {
                         val name = item.optString("name").ifBlank { display.substringBefore(',') }
                         if (name.isBlank()) return@mapNotNull null
                         val kind = item.optString("addresstype").ifBlank { item.optString("type") }
+                        val addressAreas = listOf("city_district", "borough", "suburb", "town", "village", "neighbourhood")
+                            .map(::part).filter { it.isNotBlank() }.distinct()
                         PlaceCandidate(name, city, part("country").ifBlank { "国家未标注" },
                             item.optDouble("lat", Double.NaN), item.optDouble("lon", Double.NaN), display,
-                            PlaceSearchSource.NOMINATIM, region, part("country_code"), kind in ADMINISTRATIVE_TYPES)
+                            PlaceSearchSource.NOMINATIM, region, part("country_code"), kind in ADMINISTRATIVE_TYPES,
+                            street = part("road"), houseNumber = part("house_number"), addressAreas = addressAreas)
                     }.filter { PlaceSearchPolicy.accepts(key, it) }.distinctBy { listOf(it.name, it.lat, it.lng) }
                     val result = PlaceSearchOutcome(PlaceSearchSource.NOMINATIM,
                         if (places.isEmpty()) PlaceSearchState.EMPTY else PlaceSearchState.RESULTS,
@@ -198,7 +201,8 @@ internal class PlaceSearchRepository(context: Context) {
             PlaceCandidate(name, address.locality ?: address.subAdminArea ?: address.adminArea ?: "城市未标注",
                 address.countryName ?: "国家未标注", address.latitude, address.longitude,
                 lines.joinToString("，").ifBlank { administrativeParts.distinct().joinToString("，") },
-                PlaceSearchSource.SYSTEM, administrativeParts.distinct().joinToString("，"), address.countryCode.orEmpty(), administrative)
+                PlaceSearchSource.SYSTEM, administrativeParts.distinct().joinToString("，"), address.countryCode.orEmpty(), administrative,
+                street = address.thoroughfare.orEmpty(), houseNumber = address.subThoroughfare.orEmpty())
         }.filter { PlaceSearchPolicy.accepts(query, it) }.distinctBy { listOf(it.name, it.lat, it.lng) }
         return PlaceSearchOutcome(PlaceSearchSource.SYSTEM,
             if (places.isEmpty()) PlaceSearchState.EMPTY else PlaceSearchState.RESULTS, places, addresses.size)

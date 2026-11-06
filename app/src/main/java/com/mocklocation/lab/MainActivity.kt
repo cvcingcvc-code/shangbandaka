@@ -213,7 +213,7 @@ class MainActivity : AppCompatActivity() {
             text = "打开开发者选项"
             setOnClickListener { openMockAppSettings() }
         })
-        setContentView(ScrollView(this).apply { addView(root); isFillViewport = true })
+        setLocationScreenContent(ScrollView(this).apply { addView(root); isFillViewport = true })
     }
 
     private fun openMapPicker(query: String? = null) {

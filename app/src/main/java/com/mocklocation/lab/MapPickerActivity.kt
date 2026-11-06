@@ -108,7 +108,9 @@ class MapPickerActivity : AppCompatActivity() {
                 PlaceCandidate(item.getString("name", ""), item.getString("city", ""), item.getString("country", ""),
                     item.getDouble("lat"), item.getDouble("lng"), item.getString("display", ""),
                     PlaceSearchSource.values().firstOrNull { it.name == item.getString("source") } ?: PlaceSearchSource.NOMINATIM,
-                    item.getString("region", ""), item.getString("countryCode", ""), item.getBoolean("administrative"))
+                    item.getString("region", ""), item.getString("countryCode", ""), item.getBoolean("administrative"),
+                    street = item.getString("street", ""), houseNumber = item.getString("houseNumber", ""),
+                    addressAreas = item.getStringArrayList("addressAreas").orEmpty())
             }.filter { PlaceSearchPolicy.accepts(etSearch.text.toString(), it) })
             else resultsLabel.text = "请点击搜索，再选择具体地点"
             return
@@ -134,6 +136,8 @@ class MapPickerActivity : AppCompatActivity() {
                 putDouble("lat", p.lat); putDouble("lng", p.lng); putString("display", p.displayName)
                 putString("source", p.source.name); putString("region", p.region)
                 putString("countryCode", p.countryCode); putBoolean("administrative", p.administrativeOnly)
+                putString("street", p.street); putString("houseNumber", p.houseNumber)
+                putStringArrayList("addressAreas", ArrayList(p.addressAreas))
             } }))
         }
         super.onSaveInstanceState(outState)
@@ -296,7 +300,7 @@ class MapPickerActivity : AppCompatActivity() {
         }
         mapPanel.addView(btnConfirm)
         root.addView(mapPanel, LinearLayout.LayoutParams(-1, 0, 1f))
-        setContentView(root)
+        setLocationScreenContent(root)
 
         btnSearch.setOnClickListener { doSearch() }
         btnConfirm.setOnClickListener { confirmAndReturn() }

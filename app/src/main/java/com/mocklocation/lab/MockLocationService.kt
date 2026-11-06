@@ -294,8 +294,12 @@ class MockLocationService : Service() {
             startPending = true
             MockLocationStatus.update(MockLocationStatus.Phase.PREPARING, "准备启动")
             try {
-                ContextCompat.startForegroundService(ctx, Intent(ctx, MockLocationService::class.java)
-                    .putExtra(EXTRA_REQUEST, id).putExtra(EXTRA_LAT, lat).putExtra(EXTRA_LNG, lng))
+                // Start is a visible Activity action. Promote in onStartCommand after validation.
+                // A denied or cancelled request can then exit without an unfulfilled FGS deadline.
+                checkNotNull(ctx.startService(Intent(ctx, MockLocationService::class.java)
+                    .putExtra(EXTRA_REQUEST, id).putExtra(EXTRA_LAT, lat).putExtra(EXTRA_LNG, lng))) {
+                    "系统未能启动定位服务"
+                }
                 main.postDelayed({
                     if (commandId == id && startPending) {
                         startPending = false
