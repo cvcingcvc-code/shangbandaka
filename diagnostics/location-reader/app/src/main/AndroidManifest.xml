@@ -8,6 +8,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity android:name=".GoogleFlpReader" android:exported="false" />
         <!-- Explicit test-query probe only; not the main application's search UI. -->
         <activity android:name=".GeocoderProbe" android:exported="true" android:launchMode="singleTask" />
     </application>
