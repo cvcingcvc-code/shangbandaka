@@ -12,6 +12,11 @@ val keystoreProps = Properties().apply {
     if (f.exists()) FileInputStream(f).use { load(it) }
 }
 
+val baiduProps = Properties().apply {
+    val file = rootProject.file("signing/baidu.properties")
+    if (file.exists()) FileInputStream(file).use { load(it) }
+}
+
 android {
     namespace = "com.mocklocation.lab"
     compileSdk = 35
@@ -23,8 +28,9 @@ android {
         minSdk = 26
         targetSdk = 35
         testInstrumentationRunner = "android.test.InstrumentationTestRunner"
-        versionCode = 16
-        versionName = "1.1.2-rc.13"
+        versionCode = 17
+        versionName = "1.1.2-rc.14"
+        manifestPlaceholders["BAIDU_MAP_AK"] = baiduProps.getProperty("BAIDU_MAP_AK", "").trim()
     }
 
     buildTypes {
@@ -53,5 +59,7 @@ android {
 dependencies {
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("com.baidu.lbsyun:BaiduMapSDK_Map:9.0.0")
+    implementation("com.baidu.lbsyun:BaiduMapSDK_Search:9.0.0")
     testImplementation("junit:junit:4.13.2")
 }

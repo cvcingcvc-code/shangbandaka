@@ -26,8 +26,6 @@ import java.util.concurrent.atomic.AtomicReference
 @Suppress("DEPRECATION")
 class MockServiceIntegrationTest : InstrumentationTestCase() {
     private var originalMode = "default"
-    private var hadFine = false
-    private var hadCoarse = false
     private var emulatorVerified = false
     private lateinit var mainActivity: MainActivity
     private val ctx get() = instrumentation.targetContext
@@ -51,11 +49,14 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
         val appops = shell("appops get com.mocklocation.lab android:mock_location")
         originalMode = Regex("(?i)mock_location:\\s*(allow|ignore|deny|default)")
             .find(appops)?.groupValues?.get(1)?.lowercase() ?: "default"
-        hadFine = ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        hadCoarse = ctx.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        shell("pm grant com.mocklocation.lab android.permission.ACCESS_FINE_LOCATION")
-        shell("pm grant com.mocklocation.lab android.permission.ACCESS_COARSE_LOCATION")
-        val activity = Intent(ctx, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // Grant from the external test launcher. Revoking a runtime permission from
+        // tearDown kills the instrumentation process before it can report results.
+        check(ctx.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED &&
+            ctx.checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+            "Grant fine/coarse location with adb before starting emulator instrumentation"
+        }
+        val activity = Intent(ctx, MainActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         mainActivity = instrumentation.startActivitySync(activity) as MainActivity
         instrumentation.waitForIdleSync()
     }
@@ -72,8 +73,6 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
                     assertFalse("Teardown must not leave pending providers", MockLocationService.hasPendingCleanup(ctx))
                 } finally {
                     shell("appops set com.mocklocation.lab android:mock_location $originalMode")
-                    if (!hadFine) shell("pm revoke com.mocklocation.lab android.permission.ACCESS_FINE_LOCATION")
-                    if (!hadCoarse) shell("pm revoke com.mocklocation.lab android.permission.ACCESS_COARSE_LOCATION")
                 }
             }
         } finally {
@@ -292,11 +291,11 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
         }
     }
 
-    fun testBaiduButtonPassesTheKeywordAndExplicitCity() {
+    fun testBaiduSearchOpensInternalPickerWithExactKeyword() {
         val launched = AtomicReference<Intent>()
         val monitor = object : Instrumentation.ActivityMonitor() {
             override fun onStartActivity(intent: Intent): Instrumentation.ActivityResult? {
-                if (intent.data?.scheme != "baidumap") return null
+                if (intent.component?.className != BaiduMapPickerActivity::class.java.name) return null
                 launched.set(Intent(intent))
                 return Instrumentation.ActivityResult(Activity.RESULT_CANCELED, null)
             }
@@ -309,20 +308,39 @@ class MockServiceIntegrationTest : InstrumentationTestCase() {
                 all.filterIsInstance<EditText>()
                     .single { it.hint?.toString() == "输入城市、地标或具体地点" }.setText(keyword)
                 all.filterIsInstance<Button>()
-                    .single { it.text.toString() == "百度地图查地址" }.performClick()
+                    .single { it.text.toString() == "百度地图搜索地点" }.performClick()
             }
-            val launch = checkNotNull(launched.get()) { "Baidu lookup did not send an Intent" }
-            val uri = checkNotNull(launch.data)
-            assertEquals(Intent.ACTION_VIEW, launch.action)
-            assertEquals("com.baidu.BaiduMap", launch.`package`)
-            assertEquals("map", uri.authority)
-            assertEquals("/place/search", uri.path)
-            assertEquals(keyword, uri.getQueryParameter("query"))
-            assertEquals("上海", uri.getQueryParameter("region"))
-            assertEquals("andr.mocklocation.lab", uri.getQueryParameter("src"))
-            assertEquals(setOf("query", "region", "src"), uri.queryParameterNames)
+            val launch = checkNotNull(launched.get()) { "Baidu picker did not receive the search" }
+            assertEquals(BaiduMapPickerActivity::class.java.name, launch.component?.className)
+            assertEquals(keyword, launch.getStringExtra("search_query"))
         } finally {
             instrumentation.removeMonitor(monitor)
+        }
+    }
+
+    fun testBaiduPickerRequiresKeyAndConsentBeforeEnablingSearch() {
+        val prefs = ctx.getSharedPreferences("baidu_map_consent", android.content.Context.MODE_PRIVATE)
+        val hadConsent = prefs.getBoolean("sdk_privacy_agreed", false)
+        assertTrue(prefs.edit().putBoolean("sdk_privacy_agreed", false).commit())
+        var picker: BaiduMapPickerActivity? = null
+        try {
+            picker = instrumentation.startActivitySync(
+                Intent(ctx, BaiduMapPickerActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    .putExtra("search_query", "上海中心大厦")) as BaiduMapPickerActivity
+            instrumentation.waitForIdleSync()
+            instrumentation.runOnMainSync {
+                val controls = descendants(picker!!.window.decorView)
+                assertFalse(controls.filterIsInstance<Button>().single { it.text == "搜索地点" }.isEnabled)
+                assertFalse(controls.filterIsInstance<Button>().single { it.text == "确认选点并返回" }.isEnabled)
+                if (!BaiduSdkAccess.hasKey(ctx)) {
+                    assertTrue("Missing map configuration must be explained",
+                        controls.filterIsInstance<android.widget.TextView>()
+                            .any { it.text.contains("未配置百度地图密钥") })
+                }
+            }
+        } finally {
+            picker?.let { activity -> instrumentation.runOnMainSync { activity.finish() } }
+            assertTrue(prefs.edit().putBoolean("sdk_privacy_agreed", hadConsent).commit())
         }
     }
 

@@ -2,12 +2,10 @@ package com.mocklocation.lab
 
 import android.Manifest
 import android.app.Activity
-import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.LocationManager
-import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -32,7 +30,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etLng: EditText
     private lateinit var etSearch: EditText
     private lateinit var btnSearch: Button
-    private lateinit var btnBaiduLookup: Button
     private lateinit var btnMap: Button
     private lateinit var btnStart: Button
     private lateinit var btnStop: Button
@@ -62,7 +59,6 @@ class MainActivity : AppCompatActivity() {
         // 停止也用于授权恢复后的显式清理；失败状态不能禁用重试。
         btnStop.isEnabled = status.phase != MockLocationStatus.Phase.STOPPING
         btnSearch.isEnabled = !busy
-        btnBaiduLookup.isEnabled = !busy
         btnMap.isEnabled = !busy
         etSearch.isEnabled = !busy
         etLat.isEnabled = !busy
@@ -132,23 +128,12 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(etSearch)
         btnSearch = Button(this).apply {
-            text = "搜索地点"
+            text = "百度地图搜索地点"
             setOnClickListener { searchPlace() }
         }
-        btnBaiduLookup = Button(this).apply {
-            text = "百度地图查地址"
-            setOnClickListener { openBaiduLookup() }
-        }
-        root.addView(LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(btnSearch, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(btnBaiduLookup, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        })
-        root.addView(TextView(this).apply {
-            text = "可在百度地图查完整地址，返回后粘贴地址再搜索。"
-        })
+        root.addView(btnSearch)
         btnMap = Button(this).apply {
-            text = "地图手动选点"
+            text = "百度地图手动选点"
             setOnClickListener { openMapPicker() }
         }
         root.addView(btnMap)
@@ -218,8 +203,9 @@ class MainActivity : AppCompatActivity() {
 
     private fun openMapPicker(query: String? = null) {
         if (isSessionBusy()) return
-        val i = Intent(this, MapPickerActivity::class.java)
+        val i = Intent(this, BaiduMapPickerActivity::class.java)
             .putExtra("init_lat", targetLat).putExtra("init_lng", targetLng)
+            .putExtra("manual_pick", query.isNullOrBlank())
         if (!query.isNullOrBlank()) i.putExtra("search_query", query)
         startActivityForResult(i, 2001)
     }
@@ -237,28 +223,6 @@ class MainActivity : AppCompatActivity() {
         openMapPicker(query)
     }
 
-    private fun openBaiduLookup() {
-        if (isSessionBusy()) return
-        val query = etSearch.text.toString().trim()
-        if (rejectPastedLink(query)) return
-        val uri = Uri.Builder().scheme("baidumap").authority("map")
-        if (query.isNotEmpty()) {
-            uri.path("place/search").appendQueryParameter("query", query)
-            PlaceSearchPolicy.explicitCity(PlaceSearchPolicy.normalize(query))?.let {
-                uri.appendQueryParameter("region", it)
-            }
-        }
-        uri.appendQueryParameter("src", "andr.mocklocation.lab")
-        val launch = Intent(Intent.ACTION_VIEW, uri.build()).setPackage("com.baidu.BaiduMap")
-        try {
-            startActivity(launch)
-        } catch (_: ActivityNotFoundException) {
-            Toast.makeText(this, "无法打开百度地图。请确认已安装，或使用本应用的地点搜索。", Toast.LENGTH_LONG).show()
-        } catch (_: SecurityException) {
-            Toast.makeText(this, "手机限制了应用跳转。请手动打开百度地图查地址。", Toast.LENGTH_LONG).show()
-        }
-    }
-
     private fun rejectPastedLink(query: String): Boolean {
         if (!query.contains("://")) return false
         Toast.makeText(this, "请复制地点完整地址，分享链接不能直接用于选点。", Toast.LENGTH_LONG).show()
@@ -272,7 +236,7 @@ class MainActivity : AppCompatActivity() {
         if (isSessionBusy()) return
         val lat = data.getDoubleExtra("lat", Double.NaN)
         val lng = data.getDoubleExtra("lng", Double.NaN)
-        if (!lat.isFinite() || !lng.isFinite()) return
+        if (!lat.isFinite() || !lng.isFinite() || lat !in -90.0..90.0 || lng !in -180.0..180.0) return
         targetLat = lat
         targetLng = lng
         etLat.setText(lat.toString())

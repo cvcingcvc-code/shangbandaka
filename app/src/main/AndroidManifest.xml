@@ -24,6 +24,8 @@
         android:label="@string/app_name"
         android:theme="@style/Theme.MockLocationLab">
 
+        <meta-data android:name="com.baidu.lbsapi.API_KEY" android:value="${BAIDU_MAP_AK}" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -41,6 +43,11 @@
 
         <activity
             android:name=".MapPickerActivity"
+            android:exported="false"
+            android:label="@string/map_picker_title" />
+
+        <activity
+            android:name=".BaiduMapPickerActivity"
             android:exported="false"
             android:label="@string/map_picker_title" />
 
