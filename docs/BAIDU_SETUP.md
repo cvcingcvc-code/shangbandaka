@@ -4,7 +4,9 @@
 
 ## 申请 Android AK
 
-在 [百度控制台](https://lbsyun.baidu.com/apiconsole/key)创建应用，应用类型选择 Android SDK。
+1. 登录 [百度控制台](https://lbsyun.baidu.com/apiconsole/key)，进入「应用管理 → 我的应用 → 创建应用」。
+2. 应用名填写 Mock Location Lab，类型选择「Android SDK」，按控制台勾选本应用使用的地图和检索服务。
+3. 填写下表的包名及发布版 SHA-1，提交后取得 Android AK。[百度官方申请说明](https://lbsyun.baidu.com/docs/guide?title=android-guide%2Fcreate-project%2Fak)
 
 | 配置项 | 值 |
 | --- | --- |
@@ -12,6 +14,8 @@
 | Release SHA-1 | C7:61:83:AB:07:04:36:8B:2C:DF:85:3C:7E:E8:06:33:F4:53:ED:B4 |
 
 将生成的 Android AK 写入本机文件 `F:\MockLocationLab\signing\baidu.properties`。
+
+可以用记事本新建这个文件，保存类型选择「所有文件」，避免变成 baidu.properties.txt。AK 不用发到公开仓库或聊天中。
 
 ```properties
 BAIDU_MAP_AK=在这里填写你申请的Android密钥
