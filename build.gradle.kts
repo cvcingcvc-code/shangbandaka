@@ -12,6 +12,9 @@ buildscript {
 
 allprojects {
     repositories {
+        mavenCentral {
+            content { includeGroup("com.baidu.lbsyun") }
+        }
         maven("https://maven.aliyun.com/repository/google")
         maven("https://maven.aliyun.com/repository/central")
         mavenCentral()

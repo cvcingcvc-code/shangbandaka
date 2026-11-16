@@ -1,5 +1,6 @@
 # Gradle
 .gradle/
+.kotlin/
 build/
 */build/
 !gradle/wrapper/gradle-wrapper.jar
@@ -14,6 +15,7 @@ local.properties
 *.jks
 *.keystore
 keystore.properties
+baidu.properties
 
 # 构建产物与本地 APK
 *.apk
