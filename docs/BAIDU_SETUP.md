@@ -23,6 +23,8 @@ BAIDU_MAP_AK=在这里填写你申请的Android密钥
 
 重新构建并安装原签名 Release。调试证书的 SHA-1 与 Release 不同，调试测试需要控制台中对应的证书授权。密钥文件已由 Git 忽略；签名密钥和密码仍仅保存在本地。Android AK 会嵌入安装包，由百度校验包名和证书。
 
+2026-11-16 已准备本机空配置模板；`BAIDU_MAP_AK=` 仍表示未配置。正常 Release 构建会在打包前检查，并以 `BAIDU_AK_NOT_CONFIGURED` 拒绝空值和占位配置。检查结果不输出 AK，也不能代替百度 SDK 的真实授权。内部缺 AK 回归的显式例外见 [构建说明](../BUILD_GUIDE.md)。
+
 AK 是使用百度服务的必要配置。缺少 AK 时，选点页明确提示配置缺失，搜索和确认禁用。配置成功后还须实测实际搜索、地图瓦片、授权错误与所选地点的落点。[百度接入说明](https://lbsyun.baidu.com/docs/android?title=androidsdk%2Fguide%2Fcreate-project%2Fandroidstudio)
 
 ## 坐标与定位

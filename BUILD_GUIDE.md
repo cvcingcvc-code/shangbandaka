@@ -8,7 +8,15 @@
 
 Release 签名配置读取本地 `signing/keystore.properties`；密钥及配置不提交。发布前用 `apksigner verify --print-certs` 对比此前 Release 的签名证书，计算新 APK SHA-256。没有原密钥时不要换签名冒充兼容升级包。
 
-rc.14 百度主流程需要本机 `signing/baidu.properties` 中的 Android AK，包名和 Release SHA-1 见 [申请与配置](docs/BAIDU_SETUP.md)。没有 AK 也可以构建以检查配置拦截、定位生命周期和备用坐标输入；这样的安装包无法执行百度搜索/地图确认，不作为可用新版发布。不要把签名配置或 AK 文件提交到仓库。
+rc.14 百度主流程需要本机 `signing/baidu.properties` 中的 Android AK，包名和 Release SHA-1 见 [申请与配置](docs/BAIDU_SETUP.md)。正常 Release 在 `preReleaseBuild` 前运行 `verifyReleaseBaiduKey`；空值、非 ASCII/含空白的内容及常见占位值会使构建失败，不能继续打包。该检查不验证账号权益、包名/证书授权或百度服务可用性，实际授权与地图仍须运行验收。不要把签名配置或 AK 文件提交到仓库。
+
+无 AK 的 debug 构建仍用于检查配置拦截、定位生命周期和备用坐标输入。只有内部签名回归需要缺 AK 的 Release 时，显式执行：
+
+```powershell
+.\gradlew.bat -PallowMissingBaiduKeyForQa=true :app:assembleRelease
+```
+
+此例外只允许内部 QA，不解锁应用内百度搜索或确认，不证明百度功能可用，也不是公开交付命令。旧内部包及其完整性记录保留。正常发布命令不应包含该例外参数。
 
 最新验收见 [STATUS.md](STATUS.md)。模拟器测试不替代实体手机验收。47 项 JVM 测试覆盖定位、清理、坐标转换、地图导航、搜索匹配、超时与查询修订；`node tools/check-map-bridge.cjs` 检查保留的旧地图桥。设备仪器测试仅允许在模拟器运行，会临时改变测试应用的 AppOp 并恢复；真实设备按独立验收表操作。
 
